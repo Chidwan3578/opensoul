@@ -6,7 +6,7 @@
 # It's designed for quick one-tap checking from phone home screen.
 
 # Server hostname (via Tailscale or SSH config)
-SERVER="${OPENSOUL_SERVER:-${OPENSOUL_SERVER:-l36}}"
+SERVER="${OPENSOUL_SERVER:-${OPENCLAW_SERVER:-l36}}"
 
 # Check auth status
 termux-toast "Checking OpenSoul auth..."

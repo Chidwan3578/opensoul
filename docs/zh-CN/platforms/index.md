@@ -56,5 +56,5 @@ Windows 原生配套应用也在计划中；推荐通过 WSL2 使用 Gateway 网
 
 服务目标取决于操作系统：
 
-- macOS：LaunchAgent（`bot.molt.gateway` 或 `bot.molt.<profile>`；旧版 `com.opensoul.*`）
+- macOS：LaunchAgent（`ai.opensoul.gateway` 或 `ai.opensoul.<profile>`；旧版 `com.opensoul.*`）
 - Linux/WSL2：systemd 用户服务（`opensoul-gateway[-<profile>].service`）

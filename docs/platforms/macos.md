@@ -34,15 +34,15 @@ capabilities to the agent as a node.
 
 ## Launchd control
 
-The app manages a per‑user LaunchAgent labeled `bot.molt.gateway`
-(or `bot.molt.<profile>` when using `--profile`/`OPENSOUL_PROFILE`; legacy `com.opensoul.*` still unloads).
+The app manages a per‑user LaunchAgent labeled `ai.opensoul.gateway`
+(or `ai.opensoul.<profile>` when using `--profile`/`OPENSOUL_PROFILE`; legacy `com.opensoul.*` still unloads).
 
 ```bash
-launchctl kickstart -k gui/$UID/bot.molt.gateway
-launchctl bootout gui/$UID/bot.molt.gateway
+launchctl kickstart -k gui/$UID/ai.opensoul.gateway
+launchctl bootout gui/$UID/ai.opensoul.gateway
 ```
 
-Replace the label with `bot.molt.<profile>` when running a named profile.
+Replace the label with `ai.opensoul.<profile>` when running a named profile.
 
 If the LaunchAgent isn’t installed, enable it from the app or run
 `opensoul gateway install`.

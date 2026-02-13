@@ -1,12 +1,12 @@
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
+import type { ApiContributor, Entry, MapConfig, User } from "./update-opensoul-contributors.types.js";
 
 const REPO = "opensoul/opensoul";
 const PER_LINE = 10;
 
-const mapPath = resolve("scripts/clawtributors-map.json");
+const mapPath = resolve("scripts/opensoul-contributors-map.json");
 const mapConfig = JSON.parse(readFileSync(mapPath, "utf8")) as MapConfig;
 
 const displayName = mapConfig.displayName ?? {};
@@ -240,13 +240,13 @@ const start = readme.indexOf('<p align="left">');
 const end = readme.indexOf("</p>", start);
 
 if (start === -1 || end === -1) {
-  throw new Error("README.md missing clawtributors block");
+  throw new Error("README.md missing opensoul-contributors block");
 }
 
 const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(end)}`;
 writeFileSync(readmePath, next);
 
-console.log(`Updated README clawtributors: ${entries.length} entries`);
+console.log(`Updated README opensoul-contributors: ${entries.length} entries`);
 
 function run(cmd: string): string {
   return execSync(cmd, {

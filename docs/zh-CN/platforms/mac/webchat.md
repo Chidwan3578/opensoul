@@ -26,7 +26,7 @@ macOS 菜单栏应用将 WebChat UI 嵌入为原生 SwiftUI 视图。它连接�
   ```bash
   dist/OpenSoul.app/Contents/MacOS/OpenSoul --webchat
   ```
-- 日志：`./scripts/clawlog.sh`（子系统 `bot.molt`，类别 `WebChatSwiftUI`）。
+- 日志：`./scripts/opensoul-log.sh`（子系统 `ai.opensoul`，类别 `WebChatSwiftUI`）。
 
 ## 工作原理
 

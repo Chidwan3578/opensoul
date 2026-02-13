@@ -172,7 +172,7 @@ opensoul logs --follow
 
 如果你使用受管理服务：
 
-- macOS launchd（应用捆绑的 LaunchAgent）：`launchctl kickstart -k gui/$UID/bot.molt.gateway`（使用 `bot.molt.<profile>`；旧版 `com.opensoul.*` 仍然有效）
+- macOS launchd（应用捆绑的 LaunchAgent）：`launchctl kickstart -k gui/$UID/ai.opensoul.gateway`（使用 `ai.opensoul.<profile>`；旧版 `com.opensoul.*` 仍然有效）
 - Linux systemd 用户服务：`systemctl --user restart opensoul-gateway[-<profile>].service`
 - Windows（WSL2）：`systemctl --user restart opensoul-gateway[-<profile>].service`
   - `launchctl`/`systemctl` 仅在服务已安装时有效；否则运行 `opensoul gateway install`。

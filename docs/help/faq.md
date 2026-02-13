@@ -2440,7 +2440,7 @@ Quick setup (recommended):
 - Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
 - Install a per-profile service: `opensoul --profile <name> gateway install`.
 
-Profiles also suffix service names (`bot.molt.<profile>`; legacy `com.opensoul.*`, `opensoul-gateway-<profile>.service`, `OpenSoul Gateway (<profile>)`).
+Profiles also suffix service names (`ai.opensoul.<profile>`; legacy `com.opensoul.*`, `opensoul-gateway-<profile>.service`, `OpenSoul Gateway (<profile>)`).
 Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does invalid handshake code 1008 mean

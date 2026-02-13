@@ -153,7 +153,7 @@ describe("daemon-cli coverage", () => {
         OPENSOUL_CONFIG_PATH: "/tmp/opensoul-daemon-state/opensoul.json",
         OPENSOUL_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/bot.molt.gateway.plist",
+      sourcePath: "/tmp/ai.opensoul.gateway.plist",
     });
 
     const { registerDaemonCli } = await import("./daemon-cli.js");

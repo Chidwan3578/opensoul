@@ -24,7 +24,7 @@ agent (with a session switcher for other sessions).
   dist/OpenSoul.app/Contents/MacOS/OpenSoul --webchat
   ```
 
-- Logs: `./scripts/clawlog.sh` (subsystem `bot.molt`, category `WebChatSwiftUI`).
+- Logs: `./scripts/opensoul-log.sh` (subsystem `ai.opensoul`, category `WebChatSwiftUI`).
 
 ## How it’s wired
 

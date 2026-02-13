@@ -49,5 +49,5 @@ Use one of these (all supported):
 
 The service target depends on OS:
 
-- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.opensoul.*`)
+- macOS: LaunchAgent (`ai.opensoul.gateway` or `ai.opensoul.<profile>`; legacy `com.opensoul.*`)
 - Linux/WSL2: systemd user service (`opensoul-gateway[-<profile>].service`)

@@ -311,7 +311,7 @@ describe("mention helpers", () => {
   });
 
   it("normalizes zero-width characters", () => {
-    expect(normalizeMentionText("open\u200bclaw")).toBe("opensoul");
+    expect(normalizeMentionText("open\u200bsoul")).toBe("opensoul");
   });
 
   it("matches patterns case-insensitively", () => {

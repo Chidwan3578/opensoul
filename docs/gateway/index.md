@@ -65,7 +65,7 @@ Supported if you isolate state + config and use unique ports. Full guide: [Multi
 
 Service names are profile-aware:
 
-- macOS: `bot.molt.<profile>` (legacy `com.opensoul.*` may still exist)
+- macOS: `ai.opensoul.<profile>` (legacy `com.opensoul.*` may still exist)
 - Linux: `opensoul-gateway-<profile>.service`
 - Windows: `OpenSoul Gateway (<profile>)`
 
@@ -206,8 +206,8 @@ See also: [Presence](/concepts/presence) for how presence is produced/deduped an
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
-  - `opensoul gateway install` writes `~/Library/LaunchAgents/bot.molt.gateway.plist`
-    (or `bot.molt.<profile>.plist`; legacy `com.opensoul.*` is cleaned up).
+  - `opensoul gateway install` writes `~/Library/LaunchAgents/ai.opensoul.gateway.plist`
+    (or `ai.opensoul.<profile>.plist`; legacy `com.opensoul.*` is cleaned up).
   - `opensoul doctor` audits the LaunchAgent config and can update it to current defaults.
 
 ## Gateway service management (CLI)
@@ -240,11 +240,11 @@ Notes:
 Bundled mac app:
 
 - OpenSoul.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled
-  `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.opensoul.*` labels still unload cleanly).
-- To stop it cleanly, use `opensoul gateway stop` (or `launchctl bootout gui/$UID/bot.molt.gateway`).
-- To restart, use `opensoul gateway restart` (or `launchctl kickstart -k gui/$UID/bot.molt.gateway`).
+  `ai.opensoul.gateway` (or `ai.opensoul.<profile>`; legacy `com.opensoul.*` labels still unload cleanly).
+- To stop it cleanly, use `opensoul gateway stop` (or `launchctl bootout gui/$UID/ai.opensoul.gateway`).
+- To restart, use `opensoul gateway restart` (or `launchctl kickstart -k gui/$UID/ai.opensoul.gateway`).
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `opensoul gateway install` first.
-  - Replace the label with `bot.molt.<profile>` when running a named profile.
+  - Replace the label with `ai.opensoul.<profile>` when running a named profile.
 
 ## Supervision (systemd user unit)
 

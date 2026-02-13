@@ -16,10 +16,10 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
-const LEGACY_STATE_DIRNAMES = [".opensoul", ".opensoul", ".moldbot"] as const;
+const LEGACY_STATE_DIRNAMES = [".openclaw", ".clawdbot", ".moltbot", ".moldbot"] as const;
 const NEW_STATE_DIRNAME = ".opensoul";
 const CONFIG_FILENAME = "opensoul.json";
-const LEGACY_CONFIG_FILENAMES = ["opensoul.json", "opensoul.json", "moldbot.json"] as const;
+const LEGACY_CONFIG_FILENAMES = ["openclaw.json", "clawdbot.json", "moltbot.json", "moldbot.json"] as const;
 
 function legacyStateDirs(homedir: () => string = os.homedir): string[] {
   return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
@@ -50,7 +50,7 @@ export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.OPENSOUL_STATE_DIR?.trim() || env.OPENSOUL_STATE_DIR?.trim();
+  const override = env.OPENSOUL_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override);
   }
@@ -96,7 +96,7 @@ export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, os.homedir),
 ): string {
-  const override = env.OPENSOUL_CONFIG_PATH?.trim() || env.OPENSOUL_CONFIG_PATH?.trim();
+  const override = env.OPENSOUL_CONFIG_PATH?.trim() || env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override);
   }
@@ -172,13 +172,13 @@ export function resolveDefaultConfigCandidates(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string[] {
-  const explicit = env.OPENSOUL_CONFIG_PATH?.trim() || env.OPENSOUL_CONFIG_PATH?.trim();
+  const explicit = env.OPENSOUL_CONFIG_PATH?.trim() || env.OPENCLAW_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit)];
   }
 
   const candidates: string[] = [];
-  const opensoulStateDir = env.OPENSOUL_STATE_DIR?.trim() || env.OPENSOUL_STATE_DIR?.trim();
+  const opensoulStateDir = env.OPENSOUL_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
   if (opensoulStateDir) {
     const resolved = resolveUserPath(opensoulStateDir);
     candidates.push(path.join(resolved, CONFIG_FILENAME));
@@ -237,7 +237,7 @@ export function resolveGatewayPort(
   cfg?: OpenSoulConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envRaw = env.OPENSOUL_GATEWAY_PORT?.trim() || env.OPENSOUL_GATEWAY_PORT?.trim();
+  const envRaw = env.OPENSOUL_GATEWAY_PORT?.trim() || env.OPENCLAW_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) {

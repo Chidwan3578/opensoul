@@ -81,14 +81,14 @@ Use this if the gateway service keeps running but `opensoul` is missing.
 
 ### macOS (launchd)
 
-Default label is `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.opensoul.*` may still exist):
+Default label is `ai.opensoul.gateway` (or `ai.opensoul.<profile>`; legacy `com.opensoul.*` may still exist):
 
 ```bash
-launchctl bootout gui/$UID/bot.molt.gateway
-rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
+launchctl bootout gui/$UID/ai.opensoul.gateway
+rm -f ~/Library/LaunchAgents/ai.opensoul.gateway.plist
 ```
 
-If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.opensoul.*` plists if present.
+If you used a profile, replace the label and plist name with `ai.opensoul.<profile>`. Remove any legacy `com.opensoul.*` plists if present.
 
 ### Linux (systemd user unit)
 

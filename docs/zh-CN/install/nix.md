@@ -64,7 +64,7 @@ OPENSOUL_NIX_MODE=1
 在 macOS 上，GUI 应用不会自动继承 shell 环境变量。你也可以通过 defaults 启用 Nix 模式：
 
 ```bash
-defaults write bot.molt.mac opensoul.nixMode -bool true
+defaults write ai.opensoul.mac opensoul.nixMode -bool true
 ```
 
 ### 配置 + 状态路径

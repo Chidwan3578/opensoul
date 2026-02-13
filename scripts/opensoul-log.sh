@@ -21,7 +21,7 @@ handle_sudo_error() {
     echo -e "\n${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${YELLOW}⚠️  Password Required for Log Access${NC}"
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-    echo -e "clawlog needs to use sudo to show complete log data (Apple hides sensitive info by default)."
+    echo -e "opensoul-log needs to use sudo to show complete log data (Apple hides sensitive info by default)."
     echo -e "\nTo avoid password prompts, configure passwordless sudo for the log command:"
     echo -e "See: ${BLUE}apple/docs/logging-private-fix.md${NC}\n"
     echo -e "Quick fix:"
@@ -48,10 +48,10 @@ SHOW_HELP=false
 # Function to show usage
 show_usage() {
     cat << EOF
-clawlog - OpenSoul Logging Utility
+opensoul-log - OpenSoul Logging Utility
 
 USAGE:
-    clawlog [OPTIONS]
+    opensoul-log [OPTIONS]
 
 DESCRIPTION:
     View OpenSoul logs with full details (bypasses Apple's privacy redaction).
@@ -69,10 +69,10 @@ LOG CATEGORIES (examples):
     • shell               - ShellExecutor
 
 QUICK START:
-    clawlog -n 100             Show last 100 lines from all components
-    clawlog -f                 Follow logs in real-time
-    clawlog -e                 Show only errors
-    clawlog -c ServerManager   Show logs from ServerManager only
+    opensoul-log -n 100             Show last 100 lines from all components
+    opensoul-log -f                 Follow logs in real-time
+    opensoul-log -e                 Show only errors
+    opensoul-log -c ServerManager   Show logs from ServerManager only
 
 OPTIONS:
     -h, --help              Show this help message
@@ -91,15 +91,15 @@ OPTIONS:
     --json                  Output in JSON format
 
 EXAMPLES:
-    clawlog                   Show last 50 lines from past 5 minutes (default)
-    clawlog -f                Stream logs continuously
-    clawlog -n 100            Show last 100 lines
-    clawlog -e                Show only recent errors
-    clawlog -l 30m -n 200     Show last 200 lines from past 30 minutes
-    clawlog -c ServerManager  Show recent ServerManager logs
-    clawlog -s "fail"         Search for "fail" in recent logs
-    clawlog --server -e       Show recent server errors
-    clawlog -f -d             Stream debug logs continuously
+    opensoul-log                   Show last 50 lines from past 5 minutes (default)
+    opensoul-log -f                Stream logs continuously
+    opensoul-log -n 100            Show last 100 lines
+    opensoul-log -e                Show only recent errors
+    opensoul-log -l 30m -n 200     Show last 200 lines from past 30 minutes
+    opensoul-log -c ServerManager  Show recent ServerManager logs
+    opensoul-log -s "fail"         Search for "fail" in recent logs
+    opensoul-log --server -e       Show recent server errors
+    opensoul-log -f -d             Stream debug logs continuously
 
 CATEGORIES:
     Common categories include:

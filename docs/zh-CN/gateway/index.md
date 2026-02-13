@@ -70,7 +70,7 @@ pnpm gateway:watch
 
 服务名称是配置文件感知的：
 
-- macOS：`bot.molt.<profile>`（旧版 `com.opensoul.*` 可能仍然存在）
+- macOS：`ai.opensoul.<profile>`（旧版 `com.opensoul.*` 可能仍然存在）
 - Linux：`opensoul-gateway-<profile>.service`
 - Windows：`OpenSoul Gateway (<profile>)`
 
@@ -211,8 +211,8 @@ OPENSOUL_CONFIG_PATH=~/.opensoul/b.json OPENSOUL_STATE_DIR=~/.opensoul-b opensou
   - StandardOut/Err：文件路径或 `syslog`
 - 失败时，launchd 重启；致命的配置错误应保持退出，以便运维人员注意到。
 - LaunchAgents 是按用户的，需要已登录的会话；对于无头设置，使用自定义 LaunchDaemon（未随附）。
-  - `opensoul gateway install` 写入 `~/Library/LaunchAgents/bot.molt.gateway.plist`
-    （或 `bot.molt.<profile>.plist`；旧版 `com.opensoul.*` 会被清理）。
+  - `opensoul gateway install` 写入 `~/Library/LaunchAgents/ai.opensoul.gateway.plist`
+    （或 `ai.opensoul.<profile>.plist`；旧版 `com.opensoul.*` 会被清理）。
   - `opensoul doctor` 审计 LaunchAgent 配置，可以将其更新为当前默认值。
 
 ## Gateway 网关服务管理（CLI）
@@ -245,11 +245,11 @@ opensoul logs --follow
 捆绑的 mac 应用：
 
 - OpenSoul.app 可以捆绑基于 Node 的 Gateway 网关中继并安装标记为
-  `bot.molt.gateway`（或 `bot.molt.<profile>`；旧版 `com.opensoul.*` 标签仍能干净卸载）的按用户 LaunchAgent。
-- 要干净地停止它，使用 `opensoul gateway stop`（或 `launchctl bootout gui/$UID/bot.molt.gateway`）。
-- 要重启，使用 `opensoul gateway restart`（或 `launchctl kickstart -k gui/$UID/bot.molt.gateway`）。
+  `ai.opensoul.gateway`（或 `ai.opensoul.<profile>`；旧版 `com.opensoul.*` 标签仍能干净卸载）的按用户 LaunchAgent。
+- 要干净地停止它，使用 `opensoul gateway stop`（或 `launchctl bootout gui/$UID/ai.opensoul.gateway`）。
+- 要重启，使用 `opensoul gateway restart`（或 `launchctl kickstart -k gui/$UID/ai.opensoul.gateway`）。
   - `launchctl` 仅在 LaunchAgent 已安装时有效；否则先使用 `opensoul gateway install`。
-  - 运行命名配置文件时，将标签替换为 `bot.molt.<profile>`。
+  - 运行命名配置文件时，将标签替换为 `ai.opensoul.<profile>`。
 
 ## 监管（systemd 用户单元）
 

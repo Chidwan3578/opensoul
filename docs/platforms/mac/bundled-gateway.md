@@ -28,12 +28,12 @@ The macOS app’s **Install CLI** button runs the same flow via npm/pnpm (bun no
 
 Label:
 
-- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.opensoul.*` may remain)
+- `ai.opensoul.gateway` (or `ai.opensoul.<profile>`; legacy `com.opensoul.*` may remain)
 
 Plist location (per‑user):
 
-- `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+- `~/Library/LaunchAgents/ai.opensoul.gateway.plist`
+  (or `~/Library/LaunchAgents/ai.opensoul.<profile>.plist`)
 
 Manager:
 

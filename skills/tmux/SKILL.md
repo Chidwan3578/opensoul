@@ -12,7 +12,7 @@ Use tmux only when you need an interactive TTY. Prefer exec background mode for 
 ## Quickstart (isolated socket, exec tool)
 
 ```bash
-SOCKET_DIR="${OPENSOUL_TMUX_SOCKET_DIR:-${OPENSOUL_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/opensoul-tmux-sockets}}"
+SOCKET_DIR="${OPENSOUL_TMUX_SOCKET_DIR:-${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/opensoul-tmux-sockets}}"
 mkdir -p "$SOCKET_DIR"
 SOCKET="$SOCKET_DIR/opensoul.sock"
 SESSION=opensoul-python
@@ -32,7 +32,7 @@ To monitor:
 
 ## Socket convention
 
-- Use `OPENSOUL_TMUX_SOCKET_DIR` (legacy `OPENSOUL_TMUX_SOCKET_DIR` also supported).
+- Use `OPENSOUL_TMUX_SOCKET_DIR` (legacy `OPENCLAW_TMUX_SOCKET_DIR` also supported).
 - Default socket path: `"$OPENSOUL_TMUX_SOCKET_DIR/opensoul.sock"`.
 
 ## Targeting panes and naming

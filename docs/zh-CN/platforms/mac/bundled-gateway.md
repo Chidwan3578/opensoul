@@ -32,12 +32,12 @@ macOS 应用的**安装 CLI**按钮通过 npm/pnpm 运行相同的流程（不�
 
 标签：
 
-- `bot.molt.gateway`（或 `bot.molt.<profile>`；旧版 `com.opensoul.*` 可能仍然存在）
+- `ai.opensoul.gateway`（或 `ai.opensoul.<profile>`；旧版 `com.opensoul.*` 可能仍然存在）
 
 Plist 位置（每用户）：
 
-- `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  （或 `~/Library/LaunchAgents/bot.molt.<profile>.plist`）
+- `~/Library/LaunchAgents/ai.opensoul.gateway.plist`
+  （或 `~/Library/LaunchAgents/ai.opensoul.<profile>.plist`）
 
 管理者：
 
