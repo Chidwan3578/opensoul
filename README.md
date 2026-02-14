@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="girl-profile.png" alt="OpenSoul" width="480">
+</p>
+
+<p align="center">
   <h1 align="center">OpenSoul</h1>
   <p align="center">
     <strong>Your AI Soul Companion — Chat, Collaborate, Create</strong>
