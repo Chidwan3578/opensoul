@@ -326,6 +326,15 @@ public sealed class GatewayProcessManager : IAsyncDisposable
         psi.Environment["OPENSOUL_STATE_DIR"] = OpenSoulPaths.StateDir;
         psi.Environment["OPENSOUL_GATEWAY_TOKEN"] = token;
 
+        // Ensure the gateway process bypasses system proxies for local connections.
+        // Without this, proxy env vars (HTTP_PROXY, HTTPS_PROXY) inherited from the
+        // system can cause the Node.js process to route local traffic through the proxy.
+        const string noProxyList = "localhost,127.0.0.1,::1,opensoul.localapp";
+        var existingNoProxy = Environment.GetEnvironmentVariable("NO_PROXY");
+        psi.Environment["NO_PROXY"] = string.IsNullOrWhiteSpace(existingNoProxy)
+            ? noProxyList
+            : $"{existingNoProxy},{noProxyList}";
+
         _gatewayProcess = Process.Start(psi);
         if (_gatewayProcess is null)
             return false;

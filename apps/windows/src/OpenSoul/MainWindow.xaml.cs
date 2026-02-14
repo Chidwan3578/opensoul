@@ -297,8 +297,16 @@ public partial class MainWindow : Window
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "OpenSoul", "WebView2");
 
+            // Bypass system proxy for loopback and virtual host addresses.
+            // Without this, system proxies (VPN, Clash, etc.) can intercept
+            // the WebSocket connection to the local gateway, causing failures.
+            var options = new CoreWebView2EnvironmentOptions(
+                $"--proxy-bypass-list=localhost;127.0.0.1;[::1];{VIRTUAL_HOST};<local>");
+
             var env = await CoreWebView2Environment.CreateAsync(
-                userDataFolder: userDataFolder);
+                browserExecutableFolder: null,
+                userDataFolder: userDataFolder,
+                options: options);
 
             await WebView.EnsureCoreWebView2Async(env);
 
@@ -321,6 +329,10 @@ public partial class MainWindow : Window
             // Inject bridge initialization script before page load
             await WebView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(GetBridgeInitScript());
 
+            // Map local Control UI folder to a virtual hostname so ES modules work
+            // (file:// protocol blocks ES module imports due to CORS security)
+            SetupVirtualHostMapping(WebView.CoreWebView2);
+
             // Navigate to Control UI
             var controlUiUrl = GetControlUiUrl();
             _logger.LogInformation("Navigating WebView2 to: {Url}", controlUiUrl);
@@ -341,10 +353,64 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Virtual hostname used for serving Control UI files via WebView2.</summary>
+    private const string VIRTUAL_HOST = "opensoul.localapp";
+
+    /// <summary>The resolved local folder path for Control UI files.</summary>
+    private string? _controlUiFolderPath;
+
+    /// <summary>
+    /// Set up a virtual hostname mapping so that Control UI files are served
+    /// via https://opensoul.localapp/ instead of file://.
+    /// This is required because Vite-built ES modules cannot load under file:// due to CORS.
+    /// </summary>
+    private void SetupVirtualHostMapping(CoreWebView2 coreWebView)
+    {
+        var folderPath = ResolveControlUiFolderPath();
+        if (folderPath is not null)
+        {
+            _controlUiFolderPath = folderPath;
+            coreWebView.SetVirtualHostNameToFolderMapping(
+                VIRTUAL_HOST,
+                folderPath,
+                CoreWebView2HostResourceAccessKind.Allow);
+
+            _logger.LogInformation(
+                "Virtual host mapping: https://{Host}/ → {Path}", VIRTUAL_HOST, folderPath);
+        }
+    }
+
+    /// <summary>
+    /// Find the Control UI folder on disk.
+    /// Checks the app base directory first, then the project dist folder.
+    /// </summary>
+    private string? ResolveControlUiFolderPath()
+    {
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+        // Check bundled control-ui next to the exe
+        var bundledDir = Path.Combine(baseDir, "control-ui");
+        if (File.Exists(Path.Combine(bundledDir, "index.html")))
+        {
+            return bundledDir;
+        }
+
+        // Fallback: check project dist folder (for dev builds run via dotnet run)
+        var distDir = Path.GetFullPath(
+            Path.Combine(baseDir, "..", "..", "..", "..", "dist", "control-ui"));
+        if (File.Exists(Path.Combine(distDir, "index.html")))
+        {
+            return distDir;
+        }
+
+        _logger.LogWarning("Control UI folder not found");
+        return null;
+    }
+
     /// <summary>
     /// Returns the URL for the Control UI.
     /// In development, connects to the Vite dev server.
-    /// In production, loads from the bundled dist/control-ui directory.
+    /// In production, uses virtual host mapping (https://opensoul.localapp/).
     /// </summary>
     private string GetControlUiUrl()
     {
@@ -355,27 +421,16 @@ public partial class MainWindow : Window
             return devUrl;
         }
 
-        // Check for local dev server (Vite default port)
         #if DEBUG
         return "http://localhost:5173";
         #else
-        // Production: load from bundled files
-        // The Control UI is built to dist/control-ui relative to the gateway
-        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        var controlUiPath = Path.Combine(baseDir, "control-ui", "index.html");
-        if (File.Exists(controlUiPath))
+        // Production: use virtual host mapping (avoids file:// CORS issues with ES modules)
+        if (_controlUiFolderPath is not null)
         {
-            return new Uri(controlUiPath).AbsoluteUri;
+            return $"https://{VIRTUAL_HOST}/index.html";
         }
 
-        // Fallback: try gateway's dist
-        var gatewayControlUi = Path.GetFullPath(
-            Path.Combine(baseDir, "..", "..", "..", "..", "dist", "control-ui", "index.html"));
-        if (File.Exists(gatewayControlUi))
-        {
-            return new Uri(gatewayControlUi).AbsoluteUri;
-        }
-
+        // Last resort fallback
         _logger.LogWarning("Control UI files not found, falling back to localhost");
         return "http://localhost:5173";
         #endif
@@ -657,7 +712,7 @@ public partial class MainWindow : Window
 
     private void OnControlChannelStateChanged(ControlChannelState state)
     {
-        Dispatcher.InvokeAsync(() =>
+        Dispatcher.InvokeAsync(async () =>
         {
             var stateStr = state switch
             {
@@ -679,6 +734,29 @@ public partial class MainWindow : Window
 
             UpdateConnectionStatusDisplay(stateStr);
             UpdateTrayIconState(stateStr);
+
+            // When the gateway connects, re-send the init message to the Control UI
+            // with the correct gateway URL. This fixes a timing issue where shell.ready
+            // fires before the gateway is running, causing the UI to use a stale URL.
+            if (state == ControlChannelState.Connected)
+            {
+                var port = OpenSoulPaths.ReadGatewayPort();
+                var token = OpenSoulPaths.ReadGatewayToken();
+                if (port > 0)
+                {
+                    _logger.LogInformation(
+                        "Gateway connected, sending updated URL to Control UI (port {Port})", port);
+                    await _bridgeService.SendInitAsync(
+                        theme: _themeService.ResolvedCssThemeName,
+                        gatewayUrl: $"ws://127.0.0.1:{port}",
+                        token: token,
+                        settings: new
+                        {
+                            sessionKey = _settings.SessionKey,
+                            historyLimit = _settings.HistoryLimit,
+                        });
+                }
+            }
         });
     }
 
