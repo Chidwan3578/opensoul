@@ -31,6 +31,7 @@
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Velopack" Version="0.0.1298" />
   </ItemGroup>
 
   <ItemGroup>
@@ -39,6 +40,15 @@
     <Resource Include="Resources\tray-active.ico" />
     <Resource Include="Resources\tray-paused.ico" />
     <Resource Include="Resources\tray-error.ico" />
+  </ItemGroup>
+
+  <!--
+    Bundle the built Control UI (Vite output) into the output directory.
+    The Control UI is built by 'pnpm ui:build' into dist/control-ui/.
+    WebView2 loads these files in Release mode via file:// protocol.
+  -->
+  <ItemGroup Condition="Exists('..\..\..\..\dist\control-ui\index.html')">
+    <None Include="..\..\..\..\dist\control-ui\**\*" Link="control-ui\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

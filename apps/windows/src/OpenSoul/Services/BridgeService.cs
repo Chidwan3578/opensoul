@@ -148,6 +148,12 @@ public sealed class BridgeService : IDisposable
         await SendAsync("host.settingsChanged", settings);
     }
 
+    /// <summary>Open the command palette in WebView2 (triggered by Ctrl+K).</summary>
+    public async Task SendCommandPaletteAsync()
+    {
+        await SendAsync("host.commandPalette", null);
+    }
+
     /// <summary>Send a typed bridge message to WebView2.</summary>
     private async Task SendAsync(string type, object? payload = null)
     {

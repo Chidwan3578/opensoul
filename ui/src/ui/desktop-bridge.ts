@@ -134,6 +134,7 @@ export type DesktopBridgeListener = {
   onFileDrop?: (files: Array<DesktopFileDropInfo>) => void;
   onWindowState?: (state: string) => void;
   onSettingsChanged?: (settings: Record<string, unknown>) => void;
+  onCommandPalette?: () => void;
   onExecApprovalResult?: (requestId: string, approved: boolean, remember: boolean) => void;
   onDevicePairResult?: (requestId: string, approved: boolean) => void;
 };
@@ -196,6 +197,10 @@ export function attachDesktopBridgeListener(listener: DesktopBridgeListener): vo
     }
   });
 
+  bridge.on("host.commandPalette", () => {
+    listener.onCommandPalette?.();
+  });
+
   bridge.on("host.execApprovalResult", (payload) => {
     const data = payload as { requestId?: string; approved?: boolean; remember?: boolean };
     if (data?.requestId != null) {
@@ -223,6 +228,7 @@ export function detachDesktopBridgeListener(): void {
   bridge.off("host.fileDrop");
   bridge.off("host.windowState");
   bridge.off("host.settingsChanged");
+  bridge.off("host.commandPalette");
   bridge.off("host.execApprovalResult");
   bridge.off("host.devicePairResult");
 

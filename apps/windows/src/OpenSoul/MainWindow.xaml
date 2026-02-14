@@ -245,21 +245,41 @@
 
         <!-- ═══════════ MAIN CONTENT: WebView2 ═══════════ -->
         <Grid Grid.Row="1">
-            <!-- Splash overlay (shown while WebView2 loads) -->
+            <!-- Splash overlay (shown while WebView2 loads, fades out when ready) -->
             <Grid x:Name="SplashOverlay"
                   ZIndex="10"
                   Background="{DynamicResource ShellBgBrush}">
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <Image Source="Resources/opensoul.ico"
-                           Width="48" Height="48"
+                    <!-- App icon with gentle scale-in animation -->
+                    <Image x:Name="SplashIcon"
+                           Source="Resources/opensoul.ico"
+                           Width="56" Height="56"
                            RenderOptions.BitmapScalingMode="HighQuality"
-                           Margin="0,0,0,16"
-                           HorizontalAlignment="Center" />
-                    <TextBlock Text="Loading..."
-                               FontSize="14"
-                               FontFamily="Segoe UI Variable Text, Segoe UI"
+                           Margin="0,0,0,20"
+                           HorizontalAlignment="Center"
+                           RenderTransformOrigin="0.5,0.5">
+                        <Image.RenderTransform>
+                            <ScaleTransform x:Name="SplashIconScale" ScaleX="0.8" ScaleY="0.8" />
+                        </Image.RenderTransform>
+                    </Image>
+                    <!-- Brand name -->
+                    <TextBlock x:Name="SplashBrand"
+                               Text="OpenSoul"
+                               FontSize="22"
+                               FontWeight="SemiBold"
+                               FontFamily="Segoe UI Variable Display, Segoe UI"
+                               Foreground="{DynamicResource TextBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,8"
+                               Opacity="0" />
+                    <!-- Loading status text -->
+                    <TextBlock x:Name="SplashStatus"
+                               Text="Initializing..."
+                               FontSize="12"
+                               FontFamily="Segoe UI Variable Small, Segoe UI"
                                Foreground="{DynamicResource MutedBrush}"
-                               HorizontalAlignment="Center" />
+                               HorizontalAlignment="Center"
+                               Opacity="0" />
                 </StackPanel>
             </Grid>
 

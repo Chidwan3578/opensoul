@@ -29,6 +29,9 @@ public partial class MainWindow : Window
     private readonly BridgeService _bridgeService;
     private readonly NotificationService _notificationService;
     private readonly WindowStateService _windowStateService;
+    private readonly HotkeyService _hotkeyService;
+    private readonly BackdropService _backdropService;
+    private readonly UpdateService _updateService;
 
     // --- State ---
     private AppSettings _settings = new();
@@ -54,6 +57,9 @@ public partial class MainWindow : Window
         _bridgeService = new BridgeService(_loggerFactory.CreateLogger<BridgeService>());
         _notificationService = new NotificationService(_loggerFactory.CreateLogger<NotificationService>());
         _windowStateService = new WindowStateService(_loggerFactory.CreateLogger<WindowStateService>());
+        _hotkeyService = new HotkeyService(_loggerFactory.CreateLogger<HotkeyService>());
+        _backdropService = new BackdropService(_loggerFactory.CreateLogger<BackdropService>());
+        _updateService = new UpdateService(_loggerFactory.CreateLogger<UpdateService>());
 
         // Create gateway infrastructure
         var nodeLocator = new NodeLocator(_loggerFactory.CreateLogger<NodeLocator>());
@@ -89,7 +95,16 @@ public partial class MainWindow : Window
         // Wire up notification click
         _notificationService.NotificationActivated += OnNotificationActivated;
 
-        // Register keyboard shortcuts
+        // Wire up global hotkeys
+        _hotkeyService.ToggleWindowRequested += () => Dispatcher.InvokeAsync(ToggleWindowVisibility);
+        _hotkeyService.OpenChatRequested += () => Dispatcher.InvokeAsync(() =>
+        {
+            ShowAndFocusWindow();
+            _ = _bridgeService.SendNavigateAsync("chat");
+            _ = _bridgeService.SendFocusAsync("chat-input");
+        });
+
+        // Register window-level keyboard shortcuts
         RegisterKeyboardShortcuts();
     }
 
@@ -116,7 +131,22 @@ public partial class MainWindow : Window
         // Restore window state
         _windowStateService.Restore(this);
 
+        // Start splash entrance animation
+        AnimateSplashIn();
+
+        // Apply Mica/Acrylic backdrop on Windows 11 (graceful fallback on Win10)
+        var isDark = _themeService.Resolved == ThemeService.ResolvedTheme.Dark;
+        _backdropService.Apply(this, isDark);
+
+        // Register system-wide global hotkeys (Ctrl+Shift+O, Ctrl+Shift+C)
+        _hotkeyService.Register(this);
+
+        // Start background update checks (Velopack)
+        _updateService.UpdateReady += OnUpdateReady;
+        _updateService.StartBackgroundChecks();
+
         // Initialize WebView2
+        UpdateSplashStatus("Loading interface...");
         await InitializeWebViewAsync();
 
         // Auto-connect if configured
@@ -208,6 +238,7 @@ public partial class MainWindow : Window
         // Cleanup services
         try
         {
+            _hotkeyService.Dispose();
             _bridgeService.Dispose();
             _notificationService.Dispose();
             _themeService.Dispose();
@@ -393,17 +424,75 @@ public partial class MainWindow : Window
         HideSplash();
     }
 
+    /// <summary>Kick off splash entrance animations (icon scale-in + text fade).</summary>
+    private void AnimateSplashIn()
+    {
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = TimeSpan.FromMilliseconds(400);
+
+        // Icon scales from 0.8 → 1.0
+        SplashIconScale.BeginAnimation(
+            System.Windows.Media.ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(0.8, 1.0, duration) { EasingFunction = ease });
+        SplashIconScale.BeginAnimation(
+            System.Windows.Media.ScaleTransform.ScaleYProperty,
+            new DoubleAnimation(0.8, 1.0, duration) { EasingFunction = ease });
+
+        // Brand text fades in after a short delay
+        var brandFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(150),
+            EasingFunction = ease,
+        };
+        SplashBrand.BeginAnimation(OpacityProperty, brandFade);
+
+        // Status text fades in after brand
+        var statusFade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(300))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(300),
+            EasingFunction = ease,
+        };
+        SplashStatus.BeginAnimation(OpacityProperty, statusFade);
+    }
+
+    /// <summary>Update the splash status text (e.g., "Connecting...").</summary>
+    private void UpdateSplashStatus(string text)
+    {
+        if (SplashOverlay.Visibility == Visibility.Visible)
+        {
+            SplashStatus.Text = text;
+        }
+    }
+
+    /// <summary>Fade out splash overlay with a smooth multi-phase animation.</summary>
     private void HideSplash()
     {
-        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(250))
+        if (SplashOverlay.Visibility == Visibility.Collapsed) return;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseInOut };
+
+        // Phase 1: Icon scales up slightly (1.0 → 1.05) as a "done" effect
+        var iconPulse = new DoubleAnimation(1.0, 1.05, TimeSpan.FromMilliseconds(150))
         {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            EasingFunction = ease,
+            AutoReverse = true,
         };
-        fade.Completed += (_, _) =>
+        SplashIconScale.BeginAnimation(
+            System.Windows.Media.ScaleTransform.ScaleXProperty, iconPulse);
+        SplashIconScale.BeginAnimation(
+            System.Windows.Media.ScaleTransform.ScaleYProperty, iconPulse);
+
+        // Phase 2: Whole overlay fades out after a brief pause
+        var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(350))
+        {
+            BeginTime = TimeSpan.FromMilliseconds(200),
+            EasingFunction = ease,
+        };
+        fadeOut.Completed += (_, _) =>
         {
             SplashOverlay.Visibility = Visibility.Collapsed;
         };
-        SplashOverlay.BeginAnimation(OpacityProperty, fade);
+        SplashOverlay.BeginAnimation(OpacityProperty, fadeOut);
     }
 
     private void ShowWebView2Fallback()
@@ -547,6 +636,15 @@ public partial class MainWindow : Window
             };
 
             _connectionState = stateStr;
+
+            // Update splash status text during startup
+            UpdateSplashStatus(state switch
+            {
+                ControlChannelState.Connecting => "Connecting to gateway...",
+                ControlChannelState.Connected => "Connected!",
+                _ => "Waiting for gateway...",
+            });
+
             UpdateConnectionStatusDisplay(stateStr);
             UpdateTrayIconState(stateStr);
         });
@@ -738,6 +836,15 @@ public partial class MainWindow : Window
         {
             UpdateThemeIcon();
 
+            // Update Mica backdrop dark/light mode
+            _backdropService.UpdateDarkMode(theme == ThemeService.ResolvedTheme.Dark);
+
+            // If Mica is active, keep window background transparent
+            if (_backdropService.IsActive)
+            {
+                Background = System.Windows.Media.Brushes.Transparent;
+            }
+
             // Sync to WebView2
             if (_bridgeService.IsReady)
             {
@@ -908,6 +1015,36 @@ public partial class MainWindow : Window
             Close();
         }));
 
+        // Ctrl+K → Command Palette (forwarded to WebView2 via bridge)
+        var paletteCmd = new RoutedCommand();
+        paletteCmd.InputGestures.Add(new KeyGesture(Key.K, ModifierKeys.Control));
+        bindings.Add(new CommandBinding(paletteCmd, (_, _) =>
+        {
+            _ = _bridgeService.SendCommandPaletteAsync();
+        }));
+
+        // Ctrl+D → Open Dashboard
+        var dashboardCmd = new RoutedCommand();
+        dashboardCmd.InputGestures.Add(new KeyGesture(Key.D, ModifierKeys.Control));
+        bindings.Add(new CommandBinding(dashboardCmd, (_, _) =>
+        {
+            _ = _bridgeService.SendNavigateAsync("overview");
+        }));
+
+        // Ctrl+1..4 → Switch tabs
+        var tabKeys = new[] { Key.D1, Key.D2, Key.D3, Key.D4 };
+        var tabNames = new[] { "chat", "overview", "devices", "config" };
+        for (var i = 0; i < tabKeys.Length; i++)
+        {
+            var tabName = tabNames[i];
+            var tabCmd = new RoutedCommand();
+            tabCmd.InputGestures.Add(new KeyGesture(tabKeys[i], ModifierKeys.Control));
+            bindings.Add(new CommandBinding(tabCmd, (_, _) =>
+            {
+                _ = _bridgeService.SendNavigateAsync(tabName);
+            }));
+        }
+
         // F11 → Toggle fullscreen
         var fullscreenCmd = new RoutedCommand();
         fullscreenCmd.InputGestures.Add(new KeyGesture(Key.F11));
@@ -938,12 +1075,54 @@ public partial class MainWindow : Window
 
     // ═══════════ SETTINGS WINDOW ═══════════
 
+    private Windows.SettingsWindow? _settingsWindow;
+
     private void OpenSettingsWindow()
     {
-        // For now, show a simple settings implementation
-        // Full SettingsWindow will be created in Phase W2
+        // Show the native settings window (reuse if already open)
+        if (_settingsWindow is not null && _settingsWindow.IsLoaded)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
         ShowAndFocusWindow();
-        _ = _bridgeService.SendNavigateAsync("config");
+
+        _settingsWindow = new Windows.SettingsWindow(_settings, _settingsStore, _themeService)
+        {
+            Owner = this,
+        };
+
+        _settingsWindow.SettingsSaved += OnSettingsSaved;
+        _settingsWindow.Closed += (_, _) =>
+        {
+            _settingsWindow.SettingsSaved -= OnSettingsSaved;
+            _settingsWindow = null;
+        };
+
+        _settingsWindow.Show();
+    }
+
+    private void OnSettingsSaved(AppSettings settings)
+    {
+        _settings = settings;
+
+        // Apply close-to-tray setting
+        _closeToTray = settings.CloseToTray;
+
+        // Apply show-in-taskbar setting
+        ShowInTaskbar = settings.ShowInTaskbar;
+
+        // Sync theme to WebView2
+        _ = _bridgeService.SendThemeChangedAsync(_themeService.ResolvedCssThemeName);
+
+        // Sync settings to WebView2
+        _ = _bridgeService.SendSettingsChangedAsync(new
+        {
+            sessionKey = settings.SessionKey,
+            historyLimit = settings.HistoryLimit,
+            theme = _themeService.ResolvedCssThemeName,
+        });
     }
 
     // ═══════════ NOTIFICATION HANDLER ═══════════

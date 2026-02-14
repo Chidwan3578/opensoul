@@ -150,6 +150,18 @@ function initDesktopBridge(host: LifecycleHost) {
       // Track window focus state for notification decisions
       (host as unknown as Record<string, unknown>)._windowFocused = state === "focused";
     },
+
+    onCommandPalette: () => {
+      // Toggle the command palette overlay in the web UI
+      const existing = document.querySelector<HTMLElement>(".command-palette");
+      if (existing) {
+        // If already open, close it
+        existing.remove();
+        return;
+      }
+      // Dispatch a custom event that the UI can listen for
+      window.dispatchEvent(new CustomEvent("opensoul:command-palette"));
+    },
   });
 
   // Signal to WPF shell that Control UI is ready
