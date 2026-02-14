@@ -24,6 +24,7 @@
   <a href="#skills">Skills</a> •
   <a href="#cross-platform-apps">Apps</a> •
   <a href="#documentation">Docs</a> •
+  <a href="ROADMAP.md">Roadmap</a> •
   <a href="#contributing">Contributing</a> •
   <a href="#中文简介">中文</a>
 </p>

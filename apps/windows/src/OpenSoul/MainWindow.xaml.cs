@@ -1,41 +1,47 @@
-﻿using System.ComponentModel;
-using System.Linq;
-using System.Text;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Text.Json;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using Microsoft.Extensions.Logging;
+using Microsoft.Web.WebView2.Core;
 using OpenSoul.Gateway;
 using OpenSoul.Protocol;
+using OpenSoul.Services;
 
 namespace OpenSoul;
 
+/// <summary>
+/// Main application window.
+/// WPF shell with custom titlebar, system tray, and WebView2 hosting the Control UI.
+/// </summary>
 public partial class MainWindow : Window
 {
-    private const int MaxUiListItems = 500;
-    private const int MaxHistoryLimit = 1000;
-    private const int DefaultHistoryLimit = 120;
-
+    // --- Services ---
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<MainWindow> _logger;
     private readonly ControlChannel _controlChannel;
     private readonly AppSettingsStore _settingsStore = new();
-    private readonly Dictionary<string, string> _chatDeltaBuffers = new(StringComparer.Ordinal);
+    private readonly ThemeService _themeService;
+    private readonly BridgeService _bridgeService;
+    private readonly NotificationService _notificationService;
+    private readonly WindowStateService _windowStateService;
 
+    // --- State ---
     private AppSettings _settings = new();
-    private bool _isConnected;
     private bool _isShuttingDown;
-    private bool _isLoadingSessions;
-    private bool _isLoadingHistory;
-    private bool _isSyncingSessionPicker;
+    private bool _closeToTray = true;
+    private bool _hasShownCloseToTrayNotice;
+    private string _connectionState = "disconnected";
 
     public MainWindow()
     {
         InitializeComponent();
 
+        // Create logging infrastructure
         _loggerFactory = LoggerFactory.Create(builder =>
         {
             builder.AddConsole();
@@ -43,8 +49,16 @@ public partial class MainWindow : Window
         });
         _logger = _loggerFactory.CreateLogger<MainWindow>();
 
+        // Create services
+        _themeService = new ThemeService();
+        _bridgeService = new BridgeService(_loggerFactory.CreateLogger<BridgeService>());
+        _notificationService = new NotificationService(_loggerFactory.CreateLogger<NotificationService>());
+        _windowStateService = new WindowStateService(_loggerFactory.CreateLogger<WindowStateService>());
+
+        // Create gateway infrastructure
         var nodeLocator = new NodeLocator(_loggerFactory.CreateLogger<NodeLocator>());
-        var processManager = new GatewayProcessManager(_loggerFactory.CreateLogger<GatewayProcessManager>(), nodeLocator);
+        var processManager = new GatewayProcessManager(
+            _loggerFactory.CreateLogger<GatewayProcessManager>(), nodeLocator);
         var connection = new GatewayConnection(
             _loggerFactory.CreateLogger<GatewayConnection>(),
             _loggerFactory.CreateLogger<GatewayChannel>());
@@ -54,990 +68,923 @@ public partial class MainWindow : Window
             connection,
             processManager);
 
+        // Wire up gateway events
         _controlChannel.StateChanged += OnControlChannelStateChanged;
-        _controlChannel.ChatEventReceived += OnChatEventReceived;
-        _controlChannel.AgentEventReceived += OnAgentEventReceived;
-        _controlChannel.ShutdownReceived += OnShutdownReceived;
         _controlChannel.ExecApprovalRequested += OnExecApprovalRequested;
         _controlChannel.DevicePairRequested += OnDevicePairRequested;
-        _controlChannel.TickReceived += OnTickReceived;
-        _controlChannel.SnapshotReceived += OnSnapshotReceived;
 
-        Loaded += MainWindow_Loaded;
-        Closing += MainWindow_Closing;
+        // Wire up bridge events
+        _bridgeService.ShellReady += OnBridgeShellReady;
+        _bridgeService.ConnectionStateChanged += OnBridgeConnectionStateChanged;
+        _bridgeService.WebThemeChanged += OnBridgeThemeChanged;
+        _bridgeService.TabChanged += OnBridgeTabChanged;
+        _bridgeService.NotifyRequested += OnBridgeNotifyRequested;
+        _bridgeService.OpenExternalRequested += OnBridgeOpenExternal;
+        _bridgeService.GatewayActionRequested += OnBridgeGatewayAction;
+        _bridgeService.BadgeCountChanged += OnBridgeBadgeCountChanged;
+
+        // Wire up theme changes
+        _themeService.ThemeChanged += OnThemeChanged;
+
+        // Wire up notification click
+        _notificationService.NotificationActivated += OnNotificationActivated;
+
+        // Register keyboard shortcuts
+        RegisterKeyboardShortcuts();
     }
 
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    // ═══════════ LIFECYCLE ═══════════
+
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
-        OpenSoulPaths.EnsureDirectories();
-
+        // Load and apply settings
         _settings = await _settingsStore.LoadAsync();
-        if (_settings.HistoryLimit <= 0)
+        _closeToTray = true;
+        _hasShownCloseToTrayNotice = false;
+
+        // Apply theme
+        var themeMode = _settings.Theme switch
         {
-            _settings.HistoryLimit = DefaultHistoryLimit;
-        }
-        _settings.HistoryLimit = Math.Clamp(_settings.HistoryLimit, 1, MaxHistoryLimit);
+            "light" => ThemeService.ThemeMode.Light,
+            "dark" => ThemeService.ThemeMode.Dark,
+            _ => ThemeService.ThemeMode.System,
+        };
+        _themeService.Mode = themeMode;
+        _themeService.ApplyTheme();
+        UpdateThemeIcon();
 
-        ApplySettingsToUi(_settings);
-        UpdateRemoteInputsEnabled();
-        UpdateActionButtons();
-        AppendEvent("Ready");
+        // Restore window state
+        _windowStateService.Restore(this);
 
+        // Initialize WebView2
+        await InitializeWebViewAsync();
+
+        // Auto-connect if configured
         if (_settings.AutoConnectOnLaunch)
         {
-            await ConnectAsync(autoStart: true);
+            await ConnectGatewayAsync();
         }
     }
 
-    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    private async void Window_Closing(object? sender, CancelEventArgs e)
     {
         if (_isShuttingDown)
             return;
 
-        _isShuttingDown = true;
+        // Close to tray behavior
+        if (_closeToTray && !_isShuttingDown)
+        {
+            e.Cancel = true;
+            Hide();
+
+            // Show first-time notice
+            if (!_hasShownCloseToTrayNotice)
+            {
+                _hasShownCloseToTrayNotice = true;
+                _notificationService.Show(
+                    "OpenSoul is still running",
+                    "The app has been minimized to the system tray. Right-click the tray icon for options.",
+                    tag: "close-to-tray");
+            }
+            return;
+        }
+
+        // Actually shutting down
         await ShutdownAsync();
+    }
+
+    private void Window_Activated(object sender, EventArgs e)
+    {
+        _ = _bridgeService.SendWindowStateAsync("focused");
+    }
+
+    private void Window_Deactivated(object sender, EventArgs e)
+    {
+        _ = _bridgeService.SendWindowStateAsync("blurred");
+    }
+
+    private void Window_StateChanged(object? sender, EventArgs e)
+    {
+        // Update maximize/restore icon
+        MaximizeIcon.Text = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+        MaximizeButton.ToolTip = WindowState == WindowState.Maximized ? "Restore" : "Maximize";
+
+        // Notify WebView2 about minimize
+        if (WindowState == WindowState.Minimized)
+        {
+            _ = _bridgeService.SendWindowStateAsync("minimized");
+        }
+
+        // Save window state on change
+        if (WindowState != WindowState.Minimized)
+        {
+            _ = _windowStateService.SaveAsync(this);
+        }
     }
 
     private async Task ShutdownAsync()
     {
+        _isShuttingDown = true;
+
+        // Save window state
+        await _windowStateService.SaveAsync(this);
+
+        // Save settings
+        await _settingsStore.SaveAsync(_settings);
+
+        // Disconnect gateway
         try
         {
-            await _controlChannel.StopAsync(stopGateway: SelectedMode == ConnectionMode.Local);
+            var mode = string.Equals(_settings.ConnectionMode, "Remote", StringComparison.OrdinalIgnoreCase)
+                ? ConnectionMode.Remote
+                : ConnectionMode.Local;
+            await _controlChannel.StopAsync(stopGateway: mode == ConnectionMode.Local);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error while stopping control channel");
+            _logger.LogWarning(ex, "Error stopping control channel");
         }
 
+        // Cleanup services
         try
         {
+            _bridgeService.Dispose();
+            _notificationService.Dispose();
+            _themeService.Dispose();
             await _controlChannel.DisposeAsync();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Error while disposing control channel");
+            _logger.LogWarning(ex, "Error during cleanup");
         }
 
+        // Dispose tray icon
+        TrayIcon?.Dispose();
         _loggerFactory.Dispose();
     }
 
-    private ConnectionMode SelectedMode
-    {
-        get
-        {
-            var tag = (ModeComboBox.SelectedItem as ComboBoxItem)?.Tag?.ToString();
-            return string.Equals(tag, "remote", StringComparison.OrdinalIgnoreCase)
-                ? ConnectionMode.Remote
-                : ConnectionMode.Local;
-        }
-    }
+    // ═══════════ WEBVIEW2 INITIALIZATION ═══════════
 
-    private string CurrentSessionKey
+    private async Task InitializeWebViewAsync()
     {
-        get
-        {
-            var value = SessionKeyTextBox.Text.Trim();
-            return string.IsNullOrWhiteSpace(value) ? "main" : value;
-        }
-    }
-
-    private void ModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        UpdateRemoteInputsEnabled();
-    }
-
-    private async void ConnectButton_Click(object sender, RoutedEventArgs e)
-    {
-        await ConnectAsync(autoStart: false);
-    }
-
-    private async Task ConnectAsync(bool autoStart)
-    {
-        if (_controlChannel.State == ControlChannelState.Connected ||
-            _controlChannel.State == ControlChannelState.Connecting)
-        {
-            return;
-        }
-
         try
         {
-            StatusTextBlock.Text = "Connecting...";
-            UpdateActionButtons();
+            // Create WebView2 environment with custom data folder
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenSoul", "WebView2");
 
-            await SaveSettingsAsync();
+            var env = await CoreWebView2Environment.CreateAsync(
+                userDataFolder: userDataFolder);
 
-            if (SelectedMode == ConnectionMode.Local)
+            await WebView.EnsureCoreWebView2Async(env);
+
+            // Configure WebView2 settings
+            var settings = WebView.CoreWebView2.Settings;
+            settings.IsStatusBarEnabled = false;
+            settings.AreDefaultContextMenusEnabled = false;
+            settings.IsZoomControlEnabled = false;
+            settings.AreBrowserAcceleratorKeysEnabled = false;
+
+            #if DEBUG
+            settings.AreDevToolsEnabled = true;
+            #else
+            settings.AreDevToolsEnabled = false;
+            #endif
+
+            // Attach bridge service
+            _bridgeService.Attach(WebView);
+
+            // Inject bridge initialization script before page load
+            await WebView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(GetBridgeInitScript());
+
+            // Navigate to Control UI
+            var controlUiUrl = GetControlUiUrl();
+            _logger.LogInformation("Navigating WebView2 to: {Url}", controlUiUrl);
+            WebView.CoreWebView2.Navigate(controlUiUrl);
+
+            // Handle navigation completed
+            WebView.CoreWebView2.NavigationCompleted += OnWebViewNavigationCompleted;
+        }
+        catch (WebView2RuntimeNotFoundException)
+        {
+            _logger.LogError("WebView2 runtime not found");
+            ShowWebView2Fallback();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "WebView2 initialization failed");
+            ShowWebView2Fallback();
+        }
+    }
+
+    /// <summary>
+    /// Returns the URL for the Control UI.
+    /// In development, connects to the Vite dev server.
+    /// In production, loads from the bundled dist/control-ui directory.
+    /// </summary>
+    private string GetControlUiUrl()
+    {
+        // Check for dev server override
+        var devUrl = Environment.GetEnvironmentVariable("OPENSOUL_CONTROL_UI_URL");
+        if (!string.IsNullOrWhiteSpace(devUrl))
+        {
+            return devUrl;
+        }
+
+        // Check for local dev server (Vite default port)
+        #if DEBUG
+        return "http://localhost:5173";
+        #else
+        // Production: load from bundled files
+        // The Control UI is built to dist/control-ui relative to the gateway
+        var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        var controlUiPath = Path.Combine(baseDir, "control-ui", "index.html");
+        if (File.Exists(controlUiPath))
+        {
+            return new Uri(controlUiPath).AbsoluteUri;
+        }
+
+        // Fallback: try gateway's dist
+        var gatewayControlUi = Path.GetFullPath(
+            Path.Combine(baseDir, "..", "..", "..", "..", "dist", "control-ui", "index.html"));
+        if (File.Exists(gatewayControlUi))
+        {
+            return new Uri(gatewayControlUi).AbsoluteUri;
+        }
+
+        _logger.LogWarning("Control UI files not found, falling back to localhost");
+        return "http://localhost:5173";
+        #endif
+    }
+
+    /// <summary>
+    /// JavaScript code injected into WebView2 before page load.
+    /// Sets up the bridge communication channel on the web side.
+    /// </summary>
+    private static string GetBridgeInitScript()
+    {
+        return """
+            // OpenSoul Windows Bridge - injected by WPF shell
+            (function() {
+                'use strict';
+
+                // Bridge message handler registry
+                const handlers = new Map();
+
+                // Listen for messages from WPF host
+                window.chrome.webview.addEventListener('message', (event) => {
+                    const msg = event.data;
+                    if (!msg || !msg.type) return;
+
+                    const handler = handlers.get(msg.type);
+                    if (handler) {
+                        handler(msg.payload);
+                    }
+
+                    // Also dispatch as a custom event for flexibility
+                    window.dispatchEvent(new CustomEvent('opensoul-bridge', {
+                        detail: msg
+                    }));
+                });
+
+                // Public API for the Control UI to use
+                window.__opensoul_bridge = {
+                    // Send a message to WPF shell
+                    send(type, payload) {
+                        window.chrome.webview.postMessage({ type, payload });
+                    },
+
+                    // Register a handler for a specific message type from WPF
+                    on(type, handler) {
+                        handlers.set(type, handler);
+                    },
+
+                    // Remove a handler
+                    off(type) {
+                        handlers.delete(type);
+                    },
+
+                    // Check if running inside WPF shell
+                    isDesktop: true,
+                    platform: 'windows',
+                };
+
+                // Notify WPF that the bridge script is loaded
+                // (shell.ready is sent later by Control UI after full init)
+                console.log('[opensoul-bridge] Bridge script initialized');
+            })();
+            """;
+    }
+
+    private void OnWebViewNavigationCompleted(object? sender,
+        CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (e.IsSuccess)
+        {
+            _logger.LogInformation("WebView2 navigation completed successfully");
+        }
+        else
+        {
+            _logger.LogError("WebView2 navigation failed: {Status}", e.WebErrorStatus);
+        }
+
+        // Hide splash with fade animation
+        HideSplash();
+    }
+
+    private void HideSplash()
+    {
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(250))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        fade.Completed += (_, _) =>
+        {
+            SplashOverlay.Visibility = Visibility.Collapsed;
+        };
+        SplashOverlay.BeginAnimation(OpacityProperty, fade);
+    }
+
+    private void ShowWebView2Fallback()
+    {
+        WebView.Visibility = Visibility.Collapsed;
+        SplashOverlay.Visibility = Visibility.Collapsed;
+        WebView2Fallback.Visibility = Visibility.Visible;
+    }
+
+    // ═══════════ BRIDGE EVENT HANDLERS ═══════════
+
+    private async void OnBridgeShellReady()
+    {
+        await Dispatcher.InvokeAsync(async () =>
+        {
+            _logger.LogInformation("Bridge: shell.ready received from Control UI");
+
+            // Determine gateway connection info
+            string? gatewayUrl = null;
+            string? token = null;
+
+            if (string.Equals(_settings.ConnectionMode, "Remote", StringComparison.OrdinalIgnoreCase))
             {
-                await _controlChannel.StartAsync(ConnectionMode.Local);
-                AppendEvent(autoStart ? "Auto-connect started (local)" : "Connect request sent (local)");
+                gatewayUrl = _settings.RemoteUrl;
             }
             else
             {
-                await _controlChannel.StartAsync(ConnectionMode.Remote, BuildRemoteOptions());
-                AppendEvent(
-                    autoStart
-                        ? $"Auto-connect started (remote: {RemoteUrlTextBox.Text.Trim()})"
-                        : $"Connect request sent (remote: {RemoteUrlTextBox.Text.Trim()})");
-            }
-
-            await RefreshSessionsAsync();
-            await LoadHistoryAsync(clearTimeline: true);
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"Connect failed: {ex.Message}");
-            _logger.LogError(ex, "Connect failed");
-        }
-        finally
-        {
-            UpdateActionButtons();
-        }
-    }
-
-    private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            await _controlChannel.StopAsync(stopGateway: SelectedMode == ConnectionMode.Local);
-            _chatDeltaBuffers.Clear();
-            AppendEvent("Disconnected");
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"Disconnect failed: {ex.Message}");
-            _logger.LogError(ex, "Disconnect failed");
-        }
-        finally
-        {
-            UpdateActionButtons();
-        }
-    }
-
-    private async void HealthButton_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var health = await _controlChannel.RequestAsync<JsonElement>(GatewayMethod.Health);
-            if (health.ValueKind == JsonValueKind.Undefined)
-            {
-                AppendEvent("health returned empty response");
-                return;
-            }
-
-            var pretty = JsonSerializer.Serialize(health, new JsonSerializerOptions { WriteIndented = true });
-            AppendEvent("health response:\n" + pretty);
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"health failed: {ex.Message}");
-            _logger.LogError(ex, "Health request failed");
-        }
-    }
-
-    private async void RefreshSessionsButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RefreshSessionsAsync();
-    }
-
-    private async Task RefreshSessionsAsync()
-    {
-        if (!_isConnected || _isLoadingSessions)
-            return;
-
-        _isLoadingSessions = true;
-        UpdateActionButtons();
-
-        try
-        {
-            var payload = await _controlChannel.RequestAsync<JsonElement>(
-                GatewayMethod.SessionsList,
-                new SessionsListParams
+                // For local mode, read from gateway state files
+                var port = OpenSoulPaths.ReadGatewayPort();
+                var stateToken = OpenSoulPaths.ReadGatewayToken();
+                if (port > 0)
                 {
-                    Limit = 100,
-                    IncludeGlobal = true,
-                    IncludeUnknown = true,
-                    IncludeDerivedTitles = true,
-                    IncludeLastMessage = true,
-                });
-
-            if (payload.ValueKind != JsonValueKind.Object ||
-                !payload.TryGetProperty("sessions", out var sessions) ||
-                sessions.ValueKind != JsonValueKind.Array)
-            {
-                AppendEvent("sessions.list returned no sessions");
-                return;
-            }
-
-            var currentSession = CurrentSessionKey;
-            var items = new List<SessionPickerItem>();
-
-            foreach (var row in sessions.EnumerateArray())
-            {
-                if (row.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var key = ReadStringProperty(row, "key");
-                if (string.IsNullOrWhiteSpace(key))
-                    continue;
-
-                var displayName =
-                    ReadStringProperty(row, "displayName") ??
-                    ReadStringProperty(row, "derivedTitle") ??
-                    ReadStringProperty(row, "label") ??
-                    key;
-
-                var kind = ReadStringProperty(row, "kind");
-                var preview = ReadStringProperty(row, "lastMessagePreview");
-                var displayText = displayName;
-
-                if (!string.IsNullOrWhiteSpace(kind) && kind != "direct")
-                {
-                    displayText = $"[{kind}] {displayText}";
+                    gatewayUrl = $"ws://127.0.0.1:{port}";
+                    token = stateToken;
                 }
-                if (!string.IsNullOrWhiteSpace(preview))
-                {
-                    displayText = $"{displayText} - {ToSingleLine(preview)}";
-                }
-
-                items.Add(new SessionPickerItem
-                {
-                    Key = key,
-                    DisplayName = displayText,
-                });
             }
 
-            _isSyncingSessionPicker = true;
-            SessionPickerComboBox.ItemsSource = items;
+            // Send init message with all configuration
+            await _bridgeService.SendInitAsync(
+                theme: _themeService.ResolvedCssThemeName,
+                gatewayUrl: gatewayUrl,
+                token: token,
+                settings: new
+                {
+                    sessionKey = _settings.SessionKey,
+                    historyLimit = _settings.HistoryLimit,
+                });
+        });
+    }
 
-            var selected = items.FirstOrDefault(item => string.Equals(item.Key, currentSession, StringComparison.Ordinal));
-            if (selected is not null)
+    private void OnBridgeConnectionStateChanged(string state)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _connectionState = state;
+            UpdateConnectionStatusDisplay(state);
+            UpdateTrayIconState(state);
+        });
+    }
+
+    private void OnBridgeThemeChanged(string theme)
+    {
+        // WebView2 changed its theme, but we keep WPF theme in sync via ThemeService
+        // This handles the case where theme is changed within the web UI
+        Dispatcher.InvokeAsync(() =>
+        {
+            var mode = theme == "light" ? ThemeService.ThemeMode.Light : ThemeService.ThemeMode.Dark;
+            _themeService.Mode = mode;
+            _settings.Theme = theme;
+            UpdateThemeIcon();
+            _ = _settingsStore.SaveAsync(_settings);
+        });
+    }
+
+    private void OnBridgeTabChanged(string tab, string title)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            Title = string.IsNullOrWhiteSpace(title)
+                ? "OpenSoul"
+                : $"OpenSoul - {title}";
+        });
+    }
+
+    private void OnBridgeNotifyRequested(string title, string body, string? tag)
+    {
+        // Only show native notification when window is not focused
+        if (!IsActive)
+        {
+            _notificationService.Show(title, body, tag, action: "show");
+        }
+    }
+
+    private void OnBridgeOpenExternal(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open external URL: {Url}", url);
+        }
+    }
+
+    private async void OnBridgeGatewayAction(string action)
+    {
+        _logger.LogInformation("Bridge gateway action: {Action}", action);
+        // Gateway restart/stop requests from WebView2
+        // These will be handled when we wire up the ControlChannel to bridge
+    }
+
+    private void OnBridgeBadgeCountChanged(int count)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            // Update tray tooltip with badge count
+            if (count > 0)
             {
-                SessionPickerComboBox.SelectedValue = selected.Key;
+                TrayIcon.ToolTipText = $"OpenSoul - {count} pending";
             }
             else
             {
-                SessionPickerComboBox.SelectedIndex = -1;
+                UpdateTrayTooltip(_connectionState);
             }
-            _isSyncingSessionPicker = false;
-
-            AppendEvent($"Loaded {items.Count} sessions");
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"sessions.list failed: {ex.Message}");
-            _logger.LogError(ex, "sessions.list failed");
-        }
-        finally
-        {
-            _isSyncingSessionPicker = false;
-            _isLoadingSessions = false;
-            UpdateActionButtons();
-        }
+        });
     }
 
-    private void SessionPickerComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isSyncingSessionPicker)
-            return;
-
-        if (SessionPickerComboBox.SelectedItem is not SessionPickerItem selected)
-            return;
-
-        SessionKeyTextBox.Text = selected.Key;
-        _ = SaveSettingsAsync();
-    }
-
-    private async void LoadHistoryButton_Click(object sender, RoutedEventArgs e)
-    {
-        await LoadHistoryAsync(clearTimeline: true);
-    }
-
-
-    private async void RpcExecuteButton_Click(object sender, RoutedEventArgs e)
-    {
-        var method = RpcMethodTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(method))
-        {
-            AppendEvent("rpc failed: method is required");
-            return;
-        }
-
-        if (!_isConnected)
-        {
-            AppendEvent($"rpc {method} failed: not connected");
-            return;
-        }
-
-        try
-        {
-            object? parameters = null;
-            var rawParams = RpcParamsTextBox.Text.Trim();
-            if (!string.IsNullOrWhiteSpace(rawParams))
-            {
-                using var doc = JsonDocument.Parse(rawParams);
-                parameters = doc.RootElement.Clone();
-            }
-
-            var response = await _controlChannel.RequestAsync<JsonElement>(method, parameters);
-            if (response.ValueKind == JsonValueKind.Undefined)
-            {
-                AppendEvent($"rpc {method} => (empty)");
-                return;
-            }
-
-            var pretty = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
-            AppendEvent($"rpc {method} =>\n{pretty}");
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"rpc {method} failed: {ex.Message}");
-            _logger.LogError(ex, "rpc {Method} failed", method);
-        }
-    }
-    private async Task LoadHistoryAsync(bool clearTimeline)
-    {
-        if (!_isConnected || _isLoadingHistory)
-            return;
-
-        _isLoadingHistory = true;
-        UpdateActionButtons();
-
-        var sessionKey = CurrentSessionKey;
-        if (clearTimeline)
-        {
-            ChatListBox.Items.Clear();
-        }
-
-        try
-        {
-            var history = await _controlChannel.RequestAsync<JsonElement>(
-                GatewayMethod.ChatHistory,
-                new ChatHistoryParams
-                {
-                    SessionKey = sessionKey,
-                    Limit = _settings.HistoryLimit,
-                });
-
-            if (history.ValueKind != JsonValueKind.Object ||
-                !history.TryGetProperty("messages", out var messages) ||
-                messages.ValueKind != JsonValueKind.Array)
-            {
-                AppendEvent($"chat.history returned no messages for {sessionKey}");
-                return;
-            }
-
-            var count = 0;
-            foreach (var raw in messages.EnumerateArray())
-            {
-                var (role, text) = ExtractRoleAndText(raw);
-                if (string.IsNullOrWhiteSpace(text))
-                    continue;
-
-                AppendChat($"{role} [{sessionKey}]", text);
-                count++;
-            }
-
-            AppendEvent($"Loaded {count} history messages for {sessionKey}");
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"chat.history failed: {ex.Message}");
-            _logger.LogError(ex, "chat.history failed");
-        }
-        finally
-        {
-            _isLoadingHistory = false;
-            UpdateActionButtons();
-        }
-    }
-
-    private async void SendButton_Click(object sender, RoutedEventArgs e)
-    {
-        var message = MessageTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(message))
-            return;
-
-        var sessionKey = CurrentSessionKey;
-
-        try
-        {
-            var idempotencyKey = $"win-{Guid.NewGuid():N}";
-            await _controlChannel.RequestVoidAsync(
-                GatewayMethod.ChatSend,
-                new ChatSendParams
-                {
-                    SessionKey = sessionKey,
-                    Message = message,
-                    IdempotencyKey = idempotencyKey,
-                });
-
-            AppendChat($"you [{sessionKey}]", message);
-            MessageTextBox.Clear();
-        }
-        catch (Exception ex)
-        {
-            AppendEvent($"send failed: {ex.Message}");
-            _logger.LogError(ex, "Send failed");
-        }
-    }
-
-    private void MessageTextBox_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
-        {
-            e.Handled = true;
-            SendButton_Click(sender, new RoutedEventArgs());
-        }
-    }
-
-    private void ClearLogsButton_Click(object sender, RoutedEventArgs e)
-    {
-        ChatListBox.Items.Clear();
-        EventListBox.Items.Clear();
-        AppendEvent("Logs cleared");
-    }
+    // ═══════════ GATEWAY EVENT HANDLERS ═══════════
 
     private void OnControlChannelStateChanged(ControlChannelState state)
     {
-        _ = Dispatcher.InvokeAsync(async () =>
+        Dispatcher.InvokeAsync(() =>
         {
-            _isConnected = state == ControlChannelState.Connected;
-
-            StateTextBlock.Text = state.ToString();
-            StateTextBlock.Foreground = state switch
+            var stateStr = state switch
             {
-                ControlChannelState.Connected => Brushes.ForestGreen,
-                ControlChannelState.Connecting => Brushes.DarkGoldenrod,
-                ControlChannelState.Degraded => Brushes.OrangeRed,
-                _ => Brushes.DimGray,
+                ControlChannelState.Connected => "connected",
+                ControlChannelState.Connecting => "connecting",
+                ControlChannelState.Degraded => "degraded",
+                _ => "disconnected",
             };
 
-            StatusTextBlock.Text = state switch
-            {
-                ControlChannelState.Connected => "Connected",
-                ControlChannelState.Connecting => "Connecting",
-                ControlChannelState.Degraded => "Gateway degraded",
-                _ => "Disconnected",
-            };
-
-            UpdateRemoteInputsEnabled();
-            UpdateActionButtons();
-
-            if (state == ControlChannelState.Connected)
-            {
-                await RefreshSessionsAsync();
-            }
-        });
-    }
-
-    private void OnSnapshotReceived(HelloOk snapshot)
-    {
-        _ = Dispatcher.InvokeAsync(async () =>
-        {
-            var activeSession = snapshot.Snapshot?.ActiveSessionKey;
-            if (!string.IsNullOrWhiteSpace(activeSession))
-            {
-                SessionKeyTextBox.Text = activeSession;
-            }
-
-            var sessionCount = snapshot.Snapshot?.Sessions?.Length ?? 0;
-            AppendEvent($"snapshot: protocol={snapshot.ProtocolVersion}, sessions={sessionCount}");
-
-            if (_isConnected)
-            {
-                await RefreshSessionsAsync();
-            }
-        });
-    }
-
-    private void OnChatEventReceived(ChatEvent chat)
-    {
-        _ = Dispatcher.InvokeAsync(() =>
-        {
-            var runId = chat.RunId ?? "(unknown-run)";
-            var state = (chat.State ?? "delta").Trim().ToLowerInvariant();
-            var sessionKey = chat.SessionKey ?? CurrentSessionKey;
-            var text = ExtractText(chat.Message);
-
-            switch (state)
-            {
-                case "delta":
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        _chatDeltaBuffers[runId] = text;
-                        AppendChat($"assistant [{sessionKey}]", text);
-                    }
-                    break;
-                case "final":
-                    if (string.IsNullOrWhiteSpace(text) &&
-                        _chatDeltaBuffers.TryGetValue(runId, out var buffered))
-                    {
-                        text = buffered;
-                    }
-                    _chatDeltaBuffers.Remove(runId);
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        AppendChat($"assistant [{sessionKey}]", text);
-                    }
-                    AppendEvent($"chat.final run={ShortId(runId)} seq={chat.Seq}");
-                    break;
-                case "error":
-                    _chatDeltaBuffers.Remove(runId);
-                    AppendEvent($"chat.error run={ShortId(runId)}: {chat.ErrorMessage ?? "unknown error"}");
-                    break;
-                case "aborted":
-                    _chatDeltaBuffers.Remove(runId);
-                    AppendEvent($"chat.aborted run={ShortId(runId)} reason={chat.StopReason ?? "rpc"}");
-                    break;
-                default:
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        AppendChat($"assistant [{sessionKey}]", text);
-                    }
-                    AppendEvent($"chat.{state} run={ShortId(runId)} seq={chat.Seq}");
-                    break;
-            }
-        });
-    }
-
-    private void OnAgentEventReceived(AgentEvent agent)
-    {
-        _ = Dispatcher.InvokeAsync(() =>
-        {
-            var stream = string.IsNullOrWhiteSpace(agent.Stream) ? "agent" : agent.Stream;
-            var runId = agent.RunId ?? "(unknown-run)";
-            var text = ExtractText(agent.Data);
-
-            if (!string.IsNullOrWhiteSpace(text))
-            {
-                AppendChat($"{stream} [{ShortId(runId)}]", text);
-                return;
-            }
-
-            var compact = agent.Data.HasValue ? CompactJson(agent.Data.Value) : "(empty)";
-            AppendEvent($"agent.{stream} run={ShortId(runId)} seq={agent.Seq}: {compact}");
-        });
-    }
-
-    private void OnShutdownReceived(string reason)
-    {
-        AppendEvent($"shutdown event: {reason}");
-    }
-
-    private void OnTickReceived()
-    {
-        _ = Dispatcher.InvokeAsync(() =>
-        {
-            if (_isConnected)
-            {
-                StatusTextBlock.Text = $"Connected (tick {DateTime.Now:HH:mm:ss})";
-            }
+            _connectionState = stateStr;
+            UpdateConnectionStatusDisplay(stateStr);
+            UpdateTrayIconState(stateStr);
         });
     }
 
     private void OnExecApprovalRequested(ExecApprovalRequestParams request)
     {
-        _ = Dispatcher.InvokeAsync(async () =>
+        Dispatcher.InvokeAsync(async () =>
         {
-            var requestId = request.RequestId;
-            var command = request.Command ?? "(unknown command)";
-            AppendEvent($"exec approval requested: {command}");
-
-            if (string.IsNullOrWhiteSpace(requestId))
+            // Show urgent notification if minimized
+            if (WindowState == WindowState.Minimized || !IsVisible)
             {
-                AppendEvent("exec approval ignored: missing requestId");
-                return;
+                _notificationService.ShowUrgent(
+                    "Command Approval Required",
+                    $"Command: {request.Command ?? "(unknown)"}",
+                    action: "exec-approval");
             }
 
-            var dialogText = new StringBuilder()
-                .AppendLine("A command requested approval.")
-                .AppendLine()
-                .AppendLine($"Command: {command}");
+            // Show native dialog
+            var dialog = new Windows.ExecApprovalDialog(request)
+            {
+                Owner = IsVisible ? this : null,
+            };
 
-            if (!string.IsNullOrWhiteSpace(request.Cwd))
+            if (dialog.ShowDialog() == true)
             {
-                dialogText.AppendLine($"Working dir: {request.Cwd}");
-            }
-            if (!string.IsNullOrWhiteSpace(request.Reason))
-            {
-                dialogText.AppendLine($"Reason: {request.Reason}");
-            }
-            if (!string.IsNullOrWhiteSpace(request.RiskLevel))
-            {
-                dialogText.AppendLine($"Risk: {request.RiskLevel}");
-            }
-
-            dialogText
-                .AppendLine()
-                .AppendLine("Click Yes to allow, No to reject.");
-
-            var approved = MessageBox.Show(
-                this,
-                dialogText.ToString(),
-                "OpenSoul - Exec Approval",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning,
-                MessageBoxResult.No) == MessageBoxResult.Yes;
-
-            try
-            {
-                await _controlChannel.RequestVoidAsync(
-                    GatewayMethod.ExecApprovalResolve,
-                    new ExecApprovalResolveParams
-                    {
-                        RequestId = requestId,
-                        Approved = approved,
-                        Remember = false,
-                    });
-                AppendEvent($"exec approval {(approved ? "approved" : "rejected")} ({ShortId(requestId)})");
-            }
-            catch (Exception ex)
-            {
-                AppendEvent($"exec approval resolve failed: {ex.Message}");
-                _logger.LogError(ex, "exec approval resolve failed");
+                try
+                {
+                    await _controlChannel.RequestVoidAsync(
+                        GatewayMethod.ExecApprovalResolve,
+                        new ExecApprovalResolveParams
+                        {
+                            RequestId = request.RequestId ?? "",
+                            Approved = dialog.Approved,
+                            Remember = dialog.Remember,
+                        });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Exec approval resolve failed");
+                }
             }
         });
     }
 
     private void OnDevicePairRequested(DevicePairRequestedEvent request)
     {
-        _ = Dispatcher.InvokeAsync(async () =>
+        Dispatcher.InvokeAsync(async () =>
         {
-            var requestId = request.RequestId;
-            var name = request.DeviceName ?? request.DeviceId ?? "unknown";
-            AppendEvent($"device pairing requested: {name}");
-
-            if (string.IsNullOrWhiteSpace(requestId))
+            // Show notification if minimized
+            if (WindowState == WindowState.Minimized || !IsVisible)
             {
-                AppendEvent("device pairing ignored: missing requestId");
-                return;
+                _notificationService.ShowUrgent(
+                    "Device Pairing Request",
+                    $"Device: {request.DeviceName ?? request.DeviceId ?? "Unknown"}",
+                    action: "device-pair");
             }
 
-            var dialogText = new StringBuilder()
-                .AppendLine("A new device requested pairing.")
-                .AppendLine()
-                .AppendLine($"Device: {name}");
-
-            if (!string.IsNullOrWhiteSpace(request.Platform))
+            // Show native dialog
+            var dialog = new Windows.DevicePairingDialog(request)
             {
-                dialogText.AppendLine($"Platform: {request.Platform}");
-            }
-            if (!string.IsNullOrWhiteSpace(request.Ip))
+                Owner = IsVisible ? this : null,
+            };
+
+            if (dialog.ShowDialog() == true)
             {
-                dialogText.AppendLine($"IP: {request.Ip}");
-            }
-
-            dialogText
-                .AppendLine()
-                .AppendLine("Click Yes to approve, No to reject.");
-
-            var approved = MessageBox.Show(
-                this,
-                dialogText.ToString(),
-                "OpenSoul - Device Pairing",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question,
-                MessageBoxResult.No) == MessageBoxResult.Yes;
-
-            try
-            {
-                if (approved)
+                try
                 {
-                    await _controlChannel.RequestVoidAsync(
-                        GatewayMethod.DevicePairApprove,
-                        new DevicePairApproveParams { RequestId = requestId });
+                    if (dialog.Approved)
+                    {
+                        await _controlChannel.RequestVoidAsync(
+                            GatewayMethod.DevicePairApprove,
+                            new DevicePairApproveParams { RequestId = request.RequestId ?? "" });
+                    }
+                    else
+                    {
+                        await _controlChannel.RequestVoidAsync(
+                            GatewayMethod.DevicePairReject,
+                            new DevicePairRejectParams { RequestId = request.RequestId ?? "" });
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    await _controlChannel.RequestVoidAsync(
-                        GatewayMethod.DevicePairReject,
-                        new DevicePairRejectParams { RequestId = requestId });
+                    _logger.LogError(ex, "Device pairing resolve failed");
                 }
-
-                AppendEvent($"device pairing {(approved ? "approved" : "rejected")} ({ShortId(requestId)})");
-            }
-            catch (Exception ex)
-            {
-                AppendEvent($"device pairing resolve failed: {ex.Message}");
-                _logger.LogError(ex, "device pairing resolve failed");
             }
         });
     }
-    private async Task SaveSettingsAsync()
+
+    // ═══════════ GATEWAY CONNECTION ═══════════
+
+    private async Task ConnectGatewayAsync()
     {
-        _settings.ConnectionMode = SelectedMode.ToString();
-        _settings.RemoteUrl = RemoteUrlTextBox.Text.Trim();
-        _settings.SessionKey = CurrentSessionKey;
-        _settings.AutoConnectOnLaunch = AutoConnectCheckBox.IsChecked == true;
-        _settings.HistoryLimit = Math.Clamp(_settings.HistoryLimit, 1, MaxHistoryLimit);
-        await _settingsStore.SaveAsync(_settings);
-    }
-
-    private void ApplySettingsToUi(AppSettings settings)
-    {
-        RemoteUrlTextBox.Text = string.IsNullOrWhiteSpace(settings.RemoteUrl)
-            ? "ws://127.0.0.1:3000"
-            : settings.RemoteUrl;
-
-        SessionKeyTextBox.Text = string.IsNullOrWhiteSpace(settings.SessionKey)
-            ? "main"
-            : settings.SessionKey;
-
-        AutoConnectCheckBox.IsChecked = settings.AutoConnectOnLaunch;
-
-        var targetTag = string.Equals(settings.ConnectionMode, "Remote", StringComparison.OrdinalIgnoreCase)
-            ? "remote"
-            : "local";
-
-        var selected = ModeComboBox.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), targetTag, StringComparison.OrdinalIgnoreCase));
-
-        if (selected is not null)
+        try
         {
-            ModeComboBox.SelectedItem = selected;
+            if (string.Equals(_settings.ConnectionMode, "Remote", StringComparison.OrdinalIgnoreCase))
+            {
+                await _controlChannel.StartAsync(ConnectionMode.Remote, new RemoteConnectionOptions
+                {
+                    Url = _settings.RemoteUrl,
+                });
+            }
+            else
+            {
+                await _controlChannel.StartAsync(ConnectionMode.Local);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Gateway connection failed");
+            _notificationService.Show("Connection Failed", ex.Message, tag: "connect-error");
         }
     }
 
-    private RemoteConnectionOptions BuildRemoteOptions()
+    // ═══════════ UI STATE UPDATES ═══════════
+
+    private void UpdateConnectionStatusDisplay(string state)
     {
-        return new RemoteConnectionOptions
+        StatusText.Text = state switch
         {
-            Url = NullIfWhitespace(RemoteUrlTextBox.Text),
-            Token = NullIfWhitespace(RemoteTokenTextBox.Text),
-            Password = NullIfWhitespace(RemotePasswordBox.Password),
-            DeviceToken = NullIfWhitespace(RemoteDeviceTokenTextBox.Text),
+            "connected" => "Connected",
+            "connecting" => "Connecting...",
+            "degraded" => "Degraded",
+            _ => "Disconnected",
+        };
+
+        StatusDot.Fill = state switch
+        {
+            "connected" => FindResource("SuccessBrush") as Brush ?? Brushes.Green,
+            "connecting" => FindResource("WarningBrush") as Brush ?? Brushes.Orange,
+            "degraded" => FindResource("WarningBrush") as Brush ?? Brushes.Orange,
+            _ => FindResource("MutedBrush") as Brush ?? Brushes.Gray,
+        };
+
+        StatusText.Foreground = state switch
+        {
+            "connected" => FindResource("SuccessBrush") as Brush ?? Brushes.Green,
+            "degraded" => FindResource("WarningBrush") as Brush ?? Brushes.Orange,
+            _ => FindResource("MutedBrush") as Brush ?? Brushes.Gray,
+        };
+
+        // Update tray context menu
+        TrayMenuGatewayStatus.Header = $"Gateway: {StatusText.Text}";
+    }
+
+    private void UpdateTrayIconState(string state)
+    {
+        var iconName = state switch
+        {
+            "connected" => "tray-active",
+            "degraded" => "tray-error",
+            _ => "tray-idle",
+        };
+
+        try
+        {
+            TrayIcon.IconSource = new System.Windows.Media.Imaging.BitmapImage(
+                new Uri($"pack://application:,,,/Resources/{iconName}.ico"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update tray icon to {Icon}", iconName);
+        }
+
+        UpdateTrayTooltip(state);
+    }
+
+    private void UpdateTrayTooltip(string state)
+    {
+        TrayIcon.ToolTipText = state switch
+        {
+            "connected" => "OpenSoul - Connected",
+            "connecting" => "OpenSoul - Connecting...",
+            "degraded" => "OpenSoul - Degraded",
+            _ => "OpenSoul - Disconnected",
         };
     }
 
-    private static string? NullIfWhitespace(string? value)
+    private void UpdateThemeIcon()
     {
-        var trimmed = value?.Trim();
-        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        ThemeIcon.Text = _themeService.Resolved == ThemeService.ResolvedTheme.Dark ? "☀" : "🌙";
     }
 
-    private void UpdateRemoteInputsEnabled()
+    // ═══════════ THEME ═══════════
+
+    private void OnThemeChanged(ThemeService.ResolvedTheme theme)
     {
-        // Mode selection can fire during XAML initialization before fields are ready.
-        if (!IsLoaded)
+        Dispatcher.InvokeAsync(async () =>
         {
-            return;
-        }
+            UpdateThemeIcon();
 
-        var isDisconnected = _controlChannel.State == ControlChannelState.Disconnected;
-        var remoteEnabled = SelectedMode == ConnectionMode.Remote && isDisconnected;
-        RemoteUrlTextBox.IsEnabled = remoteEnabled;
-        RemoteTokenTextBox.IsEnabled = remoteEnabled;
-        RemotePasswordBox.IsEnabled = remoteEnabled;
-        RemoteDeviceTokenTextBox.IsEnabled = remoteEnabled;
-        ModeComboBox.IsEnabled = isDisconnected;
-    }
-
-    private void UpdateActionButtons()
-    {
-        var state = _controlChannel.State;
-        ConnectButton.IsEnabled = state == ControlChannelState.Disconnected;
-        DisconnectButton.IsEnabled = state != ControlChannelState.Disconnected;
-        HealthButton.IsEnabled = _isConnected;
-        SendButton.IsEnabled = _isConnected;
-        RefreshSessionsButton.IsEnabled = _isConnected && !_isLoadingSessions;
-        LoadHistoryButton.IsEnabled = _isConnected && !_isLoadingHistory;
-        SessionPickerComboBox.IsEnabled = _isConnected && !_isLoadingSessions;
-        RpcMethodTextBox.IsEnabled = _isConnected;
-        RpcParamsTextBox.IsEnabled = _isConnected;
-        RpcExecuteButton.IsEnabled = _isConnected;
-    }
-
-    private void AppendChat(string source, string content)
-    {
-        var singleLine = ToSingleLine(content);
-        AppendListLine(ChatListBox, $"{source}: {singleLine}");
-    }
-
-    private void AppendEvent(string content)
-    {
-        AppendListLine(EventListBox, content);
-    }
-
-    private void AppendListLine(ListBox listBox, string content)
-    {
-        void Append()
-        {
-            listBox.Items.Add($"{DateTime.Now:HH:mm:ss} {content}");
-            if (listBox.Items.Count > MaxUiListItems)
+            // Sync to WebView2
+            if (_bridgeService.IsReady)
             {
-                listBox.Items.RemoveAt(0);
+                await _bridgeService.SendThemeChangedAsync(
+                    theme == ThemeService.ResolvedTheme.Dark ? "dark" : "light");
             }
+        });
+    }
 
-            var last = listBox.Items.Count > 0 ? listBox.Items[listBox.Items.Count - 1] : null;
-            if (last is not null)
-            {
-                listBox.ScrollIntoView(last);
-            }
-        }
+    // ═══════════ TITLEBAR BUTTONS ═══════════
 
-        if (Dispatcher.CheckAccess())
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState.Minimized;
+    }
+
+    private void MaximizeButton_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
+    }
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
+    private void ThemeToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Toggle between light and dark
+        var next = _themeService.Resolved == ThemeService.ResolvedTheme.Dark
+            ? ThemeService.ThemeMode.Light
+            : ThemeService.ThemeMode.Dark;
+        _themeService.Mode = next;
+        _settings.Theme = next == ThemeService.ThemeMode.Dark ? "dark" : "light";
+        _ = _settingsStore.SaveAsync(_settings);
+    }
+
+    // ═══════════ SYSTEM TRAY ═══════════
+
+    private void TrayIcon_LeftClick(object sender, RoutedEventArgs e)
+    {
+        ToggleWindowVisibility();
+    }
+
+    private void TrayIcon_DoubleClick(object sender, RoutedEventArgs e)
+    {
+        ShowAndFocusWindow();
+        _ = _bridgeService.SendNavigateAsync("chat");
+        _ = _bridgeService.SendFocusAsync("chat-input");
+    }
+
+    private void TrayMenuDashboard_Click(object sender, RoutedEventArgs e)
+    {
+        ShowAndFocusWindow();
+        _ = _bridgeService.SendNavigateAsync("overview");
+    }
+
+    private void TrayMenuChat_Click(object sender, RoutedEventArgs e)
+    {
+        ShowAndFocusWindow();
+        _ = _bridgeService.SendNavigateAsync("chat");
+    }
+
+    private void TrayMenuSettings_Click(object sender, RoutedEventArgs e)
+    {
+        OpenSettingsWindow();
+    }
+
+    private void TrayMenuAbout_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show(
+            $"OpenSoul Desktop\nVersion {GetType().Assembly.GetName().Version}\n\nAI agent companion for your digital life.",
+            "About OpenSoul",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void TrayMenuQuit_Click(object sender, RoutedEventArgs e)
+    {
+        _closeToTray = false;
+        _isShuttingDown = true;
+        Close();
+    }
+
+    private void ToggleWindowVisibility()
+    {
+        if (IsVisible)
         {
-            Append();
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+                Activate();
+            }
+            else
+            {
+                Hide();
+            }
         }
         else
         {
-            _ = Dispatcher.InvokeAsync(Append);
+            ShowAndFocusWindow();
         }
     }
 
-    private static (string Role, string Text) ExtractRoleAndText(JsonElement raw)
+    private void ShowAndFocusWindow()
     {
-        var message = raw;
-        if (raw.ValueKind == JsonValueKind.Object &&
-            raw.TryGetProperty("message", out var nested) &&
-            nested.ValueKind == JsonValueKind.Object)
+        Show();
+        if (WindowState == WindowState.Minimized)
         {
-            message = nested;
+            WindowState = WindowState.Normal;
         }
-
-        var role = ReadStringProperty(message, "role") ?? "assistant";
-        var text = ExtractText(message) ?? string.Empty;
-        return (role, text);
+        Activate();
+        Focus();
     }
 
-    private static string? ExtractText(JsonElement? element)
-    {
-        if (element is null)
-            return null;
+    // ═══════════ DRAG AND DROP ═══════════
 
-        return ExtractText(element.Value);
+    private void WebView_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            e.Effects = DragDropEffects.Copy;
+            e.Handled = true;
+        }
     }
 
-    private static string? ExtractText(JsonElement element)
+    private void WebView_Drop(object sender, DragEventArgs e)
     {
-        if (element.ValueKind == JsonValueKind.Undefined || element.ValueKind == JsonValueKind.Null)
-            return null;
-
-        if (element.ValueKind == JsonValueKind.String)
-            return element.GetString();
-
-        if (element.ValueKind != JsonValueKind.Object)
-            return null;
-
-        if (element.TryGetProperty("content", out var content))
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
         {
-            var extracted = ExtractContentText(content);
-            if (!string.IsNullOrWhiteSpace(extracted))
-                return extracted;
-        }
-
-        if (element.TryGetProperty("delta", out var delta) &&
-            delta.ValueKind == JsonValueKind.String)
-        {
-            return delta.GetString();
-        }
-
-        if (element.TryGetProperty("text", out var textProp) &&
-            textProp.ValueKind == JsonValueKind.String)
-        {
-            return textProp.GetString();
-        }
-
-        if (element.TryGetProperty("message", out var nestedMessage))
-        {
-            var nested = ExtractText(nestedMessage);
-            if (!string.IsNullOrWhiteSpace(nested))
-                return nested;
-        }
-
-        return null;
-    }
-
-    private static string? ExtractContentText(JsonElement content)
-    {
-        if (content.ValueKind == JsonValueKind.String)
-            return content.GetString();
-
-        if (content.ValueKind != JsonValueKind.Array)
-            return null;
-
-        var sb = new StringBuilder();
-        foreach (var part in content.EnumerateArray())
-        {
-            if (part.ValueKind == JsonValueKind.String)
+            var fileInfos = files.Select(f =>
             {
-                var value = part.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
+                var info = new FileInfo(f);
+                return new BridgeService.FileDropInfo
                 {
-                    if (sb.Length > 0)
-                        sb.AppendLine();
-                    sb.Append(value);
-                }
-                continue;
-            }
+                    Name = info.Name,
+                    Path = info.FullName,
+                    Size = info.Exists ? info.Length : 0,
+                };
+            });
 
-            if (part.ValueKind != JsonValueKind.Object)
-                continue;
-
-            if (part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
-            {
-                var value = text.GetString();
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    if (sb.Length > 0)
-                        sb.AppendLine();
-                    sb.Append(value);
-                }
-            }
+            _ = _bridgeService.SendFileDropAsync(fileInfos);
+            e.Handled = true;
         }
-
-        return sb.Length == 0 ? null : sb.ToString();
     }
 
-    private static string? ReadStringProperty(JsonElement element, string propertyName)
+    // ═══════════ KEYBOARD SHORTCUTS ═══════════
+
+    private void RegisterKeyboardShortcuts()
     {
-        if (element.ValueKind != JsonValueKind.Object)
-            return null;
+        // Window-scoped shortcuts
+        var bindings = CommandBindings;
 
-        if (!element.TryGetProperty(propertyName, out var value))
-            return null;
+        // Ctrl+, → Settings
+        var settingsCmd = new RoutedCommand();
+        settingsCmd.InputGestures.Add(new KeyGesture(Key.OemComma, ModifierKeys.Control));
+        bindings.Add(new CommandBinding(settingsCmd, (_, _) => OpenSettingsWindow()));
 
-        return value.ValueKind switch
+        // Ctrl+Q → Quit
+        var quitCmd = new RoutedCommand();
+        quitCmd.InputGestures.Add(new KeyGesture(Key.Q, ModifierKeys.Control));
+        bindings.Add(new CommandBinding(quitCmd, (_, _) =>
         {
-            JsonValueKind.String => value.GetString(),
-            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.ToString(),
-            _ => null,
-        };
+            _closeToTray = false;
+            _isShuttingDown = true;
+            Close();
+        }));
+
+        // F11 → Toggle fullscreen
+        var fullscreenCmd = new RoutedCommand();
+        fullscreenCmd.InputGestures.Add(new KeyGesture(Key.F11));
+        bindings.Add(new CommandBinding(fullscreenCmd, (_, _) => ToggleFullscreen()));
+
+        // Ctrl+Shift+I → DevTools (debug only)
+        #if DEBUG
+        var devToolsCmd = new RoutedCommand();
+        devToolsCmd.InputGestures.Add(new KeyGesture(Key.I, ModifierKeys.Control | ModifierKeys.Shift));
+        bindings.Add(new CommandBinding(devToolsCmd, (_, _) =>
+        {
+            WebView.CoreWebView2?.OpenDevToolsWindow();
+        }));
+        #endif
     }
 
-    private static string CompactJson(JsonElement element)
+    private void ToggleFullscreen()
     {
-        var json = JsonSerializer.Serialize(element, JsonOptions.Default);
-        if (json.Length <= 240)
-            return json;
-        return json[..240] + " ...";
+        if (WindowStyle == WindowStyle.None && WindowState == WindowState.Maximized)
+        {
+            WindowState = WindowState.Normal;
+        }
+        else
+        {
+            WindowState = WindowState.Maximized;
+        }
     }
 
-    private static string ShortId(string value)
+    // ═══════════ SETTINGS WINDOW ═══════════
+
+    private void OpenSettingsWindow()
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return "(none)";
-        return value.Length <= 8 ? value : value[..8];
+        // For now, show a simple settings implementation
+        // Full SettingsWindow will be created in Phase W2
+        ShowAndFocusWindow();
+        _ = _bridgeService.SendNavigateAsync("config");
     }
 
-    private static string ToSingleLine(string value)
-    {
-        var single = value.Replace("\r", " ").Replace("\n", " ").Trim();
-        if (single.Length <= 600)
-            return single;
+    // ═══════════ NOTIFICATION HANDLER ═══════════
 
-        return single[..600] + " ...";
+    private void OnNotificationActivated(string action)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            ShowAndFocusWindow();
+
+            switch (action)
+            {
+                case "show":
+                    break;
+                case "exec-approval":
+                    // Bring to front; the dialog should already be showing
+                    break;
+                case "device-pair":
+                    // Bring to front; the dialog should already be showing
+                    break;
+                default:
+                    // Try to navigate to the action as a tab
+                    _ = _bridgeService.SendNavigateAsync(action);
+                    break;
+            }
+        });
     }
 
-    private sealed class SessionPickerItem
+    // ═══════════ WEBVIEW2 FALLBACK ═══════════
+
+    private void DownloadWebView2Button_Click(object sender, RoutedEventArgs e)
     {
-        public required string Key { get; init; }
-        public required string DisplayName { get; init; }
+        try
+        {
+            Process.Start(new ProcessStartInfo(
+                "https://go.microsoft.com/fwlink/p/?LinkId=2124703")
+            { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to open WebView2 download URL");
+        }
     }
 }
-
-
-
-
-

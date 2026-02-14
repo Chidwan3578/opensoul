@@ -54,4 +54,44 @@ public static class OpenSoulPaths
         Directory.CreateDirectory(LogsDir);
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
     }
+
+    /// <summary>
+    /// Read the gateway port from the state file.
+    /// Returns 0 if the file doesn't exist or is invalid.
+    /// </summary>
+    public static int ReadGatewayPort()
+    {
+        try
+        {
+            if (!File.Exists(GatewayPortFile))
+                return 0;
+
+            var text = File.ReadAllText(GatewayPortFile).Trim();
+            return int.TryParse(text, out var port) ? port : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Read the gateway token from the state file.
+    /// Returns null if the file doesn't exist or is empty.
+    /// </summary>
+    public static string? ReadGatewayToken()
+    {
+        try
+        {
+            if (!File.Exists(GatewayTokenFile))
+                return null;
+
+            var text = File.ReadAllText(GatewayTokenFile).Trim();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

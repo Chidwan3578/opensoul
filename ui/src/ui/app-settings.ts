@@ -22,12 +22,14 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { sendTabChanged, sendThemeChanged } from "./desktop-bridge.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
   normalizePath,
   pathForTab,
   tabFromPath,
+  titleForTab,
   type Tab,
 } from "./navigation.ts";
 import { saveSettings, type UiSettings } from "./storage.ts";
@@ -150,6 +152,8 @@ export function setTab(host: SettingsHost, next: Tab) {
   if (host.tab !== next) {
     host.tab = next;
   }
+  // Notify desktop shell about tab change for window title update
+  sendTabChanged(next, titleForTab(next));
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
   }
@@ -274,6 +278,8 @@ export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) 
   const root = document.documentElement;
   root.dataset.theme = resolved;
   root.style.colorScheme = resolved;
+  // Notify desktop shell about theme change for WPF titlebar sync
+  sendThemeChanged(resolved);
 }
 
 export function attachThemeListener(host: SettingsHost) {
