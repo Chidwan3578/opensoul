@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { OpenSoulConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
@@ -36,9 +37,34 @@ export function applyNonInteractiveGatewayConfig(
 
   const port = opts.gatewayPort ?? defaultPort;
   const bind = opts.gatewayBind ?? "loopback";
-  const authMode = opts.gatewayAuth ?? "token";
   const tailscaleMode = opts.tailscale ?? "off";
-  const gatewayToken = opts.gatewayToken;
+
+  // Determine auth mode and token.
+  let authMode = opts.gatewayAuth as string | undefined;
+  let gatewayToken = opts.gatewayToken;
+  const gatewayPassword = opts.gatewayPassword;
+
+  // When binding to LAN/custom/tailnet without explicit auth, default to token auth for security.
+  if (!authMode && bind !== "loopback") {
+    authMode = "token";
+  }
+
+  // Auto-generate token if token auth mode but no token provided.
+  if (authMode === "token" && !gatewayToken) {
+    gatewayToken = crypto.randomBytes(24).toString("base64url");
+  }
+
+  // Build the gateway auth config.
+  const gatewayAuth: Record<string, unknown> = {};
+  if (authMode) {
+    gatewayAuth.mode = authMode;
+    if (authMode === "token" && gatewayToken) {
+      gatewayAuth.token = gatewayToken;
+    }
+    if (authMode === "password" && gatewayPassword) {
+      gatewayAuth.password = gatewayPassword;
+    }
+  }
 
   const updatedConfig: OpenSoulConfig = {
     ...nextConfig,
@@ -46,6 +72,8 @@ export function applyNonInteractiveGatewayConfig(
       ...nextConfig.gateway,
       mode: "local",
       port,
+      bind,
+      ...(Object.keys(gatewayAuth).length > 0 ? { auth: gatewayAuth } : {}),
     },
   };
 

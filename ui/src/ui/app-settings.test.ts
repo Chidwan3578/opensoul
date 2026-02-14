@@ -33,6 +33,9 @@ const createHost = (tab: Tab): SettingsHost => ({
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
+  settingsOpen: false,
+  settingsSection: "general",
+  openSettings: () => {},
   logsPollInterval: null,
   debugPollInterval: null,
 });

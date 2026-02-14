@@ -78,6 +78,12 @@ import {
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import {
+  loadConfig as loadConfigInternal,
+  loadConfigSchema as loadConfigSchemaInternal,
+} from "./controllers/config.ts";
+import { loadDebug as loadDebugInternal } from "./controllers/debug.ts";
+import { loadLogs as loadLogsInternal } from "./controllers/logs.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 
@@ -324,6 +330,10 @@ export class OpenSoulApp extends LitElement {
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
 
+  // Settings panel state
+  @state() settingsOpen = false;
+  @state() settingsSection: import("./navigation.ts").SettingsTab | "general" = "general";
+
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
@@ -530,6 +540,33 @@ export class OpenSoulApp extends LitElement {
 
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
+  }
+
+  openSettings(section?: import("./navigation.ts").SettingsTab | "general") {
+    this.settingsSection = section ?? "general";
+    this.settingsOpen = true;
+    // Trigger data loading for the selected section
+    if (section === "config") {
+      void loadConfigSchemaInternal(
+        this as unknown as Parameters<typeof loadConfigSchemaInternal>[0],
+      );
+      void loadConfigInternal(this as unknown as Parameters<typeof loadConfigInternal>[0]);
+    } else if (section === "logs") {
+      this.logsAtBottom = true;
+      void loadLogsInternal(this as unknown as Parameters<typeof loadLogsInternal>[0], {
+        reset: true,
+      });
+    } else if (section === "debug") {
+      void loadDebugInternal(this as unknown as Parameters<typeof loadDebugInternal>[0]);
+    }
+  }
+
+  closeSettings() {
+    this.settingsOpen = false;
+  }
+
+  setSettingsSection(section: import("./navigation.ts").SettingsTab | "general") {
+    this.settingsSection = section;
   }
 
   // Sidebar handlers for tool output viewing

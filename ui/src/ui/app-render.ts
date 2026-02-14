@@ -3,7 +3,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { refreshChatAvatar } from "./app-chat.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import { renderChatControls, renderTab } from "./app-render.helpers.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -51,7 +51,6 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
-import { isDesktopShell } from "./desktop-bridge.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 
@@ -76,6 +75,7 @@ import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
+import { renderSettingsPanel } from "./views/settings-panel.ts";
 import { renderSkills } from "./views/skills.ts";
 import { renderUsage } from "./views/usage.ts";
 
@@ -149,7 +149,7 @@ export function renderApp(state: AppViewState) {
             <span>Health</span>
             <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
-          ${isDesktopShell() ? nothing : renderThemeToggle(state)}
+          ${nothing /* Theme toggle moved to Settings panel */}
         </div>
       </header>
       <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
@@ -179,22 +179,15 @@ export function renderApp(state: AppViewState) {
             </div>
           `;
         })}
-        <div class="nav-group nav-group--links">
-          <div class="nav-label nav-label--static">
-            <span class="nav-label__text">Resources</span>
-          </div>
-          <div class="nav-group__items">
-            <a
-              class="nav-item nav-item--external"
-              href="https://docs.opensoul.ai"
-              target="_blank"
-              rel="noreferrer"
-              title="Docs (opens in new tab)"
-            >
-              <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">Docs</span>
-            </a>
-          </div>
+        <div class="nav-bottom">
+          <button
+            class="nav-settings-btn"
+            @click=${() => state.openSettings()}
+            title="Settings"
+          >
+            <span class="nav-settings-btn__icon">${icons.settings}</span>
+            <span class="nav-settings-btn__text">Settings</span>
+          </button>
         </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
@@ -1133,90 +1126,79 @@ export function renderApp(state: AppViewState) {
             : nothing
         }
 
-        ${
-          state.tab === "config"
-            ? renderConfig({
-                raw: state.configRaw,
-                originalRaw: state.configRawOriginal,
-                valid: state.configValid,
-                issues: state.configIssues,
-                loading: state.configLoading,
-                saving: state.configSaving,
-                applying: state.configApplying,
-                updating: state.updateRunning,
-                connected: state.connected,
-                schema: state.configSchema,
-                schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
-                formMode: state.configFormMode,
-                formValue: state.configForm,
-                originalValue: state.configFormOriginal,
-                searchQuery: state.configSearchQuery,
-                activeSection: state.configActiveSection,
-                activeSubsection: state.configActiveSubsection,
-                onRawChange: (next) => {
-                  state.configRaw = next;
-                },
-                onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.configSearchQuery = query),
-                onSectionChange: (section) => {
-                  state.configActiveSection = section;
-                  state.configActiveSubsection = null;
-                },
-                onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "debug"
-            ? renderDebug({
-                loading: state.debugLoading,
-                status: state.debugStatus,
-                health: state.debugHealth,
-                models: state.debugModels,
-                heartbeat: state.debugHeartbeat,
-                eventLog: state.eventLog,
-                callMethod: state.debugCallMethod,
-                callParams: state.debugCallParams,
-                callResult: state.debugCallResult,
-                callError: state.debugCallError,
-                onCallMethodChange: (next) => (state.debugCallMethod = next),
-                onCallParamsChange: (next) => (state.debugCallParams = next),
-                onRefresh: () => loadDebug(state),
-                onCall: () => callDebugMethod(state),
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "logs"
-            ? renderLogs({
-                loading: state.logsLoading,
-                error: state.logsError,
-                file: state.logsFile,
-                entries: state.logsEntries,
-                filterText: state.logsFilterText,
-                levelFilters: state.logsLevelFilters,
-                autoFollow: state.logsAutoFollow,
-                truncated: state.logsTruncated,
-                onFilterTextChange: (next) => (state.logsFilterText = next),
-                onLevelToggle: (level, enabled) => {
-                  state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
-                },
-                onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                onRefresh: () => loadLogs(state, { reset: true }),
-                onExport: (lines, label) => state.exportLogs(lines, label),
-                onScroll: (event) => state.handleLogsScroll(event),
-              })
-            : nothing
-        }
       </main>
+
+      ${renderSettingsPanel(state, {
+        config: renderConfig({
+          raw: state.configRaw,
+          originalRaw: state.configRawOriginal,
+          valid: state.configValid,
+          issues: state.configIssues,
+          loading: state.configLoading,
+          saving: state.configSaving,
+          applying: state.configApplying,
+          updating: state.updateRunning,
+          connected: state.connected,
+          schema: state.configSchema,
+          schemaLoading: state.configSchemaLoading,
+          uiHints: state.configUiHints,
+          formMode: state.configFormMode,
+          formValue: state.configForm,
+          originalValue: state.configFormOriginal,
+          searchQuery: state.configSearchQuery,
+          activeSection: state.configActiveSection,
+          activeSubsection: state.configActiveSubsection,
+          onRawChange: (next) => {
+            state.configRaw = next;
+          },
+          onFormModeChange: (mode) => (state.configFormMode = mode),
+          onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
+          onSearchChange: (query) => (state.configSearchQuery = query),
+          onSectionChange: (section) => {
+            state.configActiveSection = section;
+            state.configActiveSubsection = null;
+          },
+          onSubsectionChange: (section) => (state.configActiveSubsection = section),
+          onReload: () => loadConfig(state),
+          onSave: () => saveConfig(state),
+          onApply: () => applyConfig(state),
+          onUpdate: () => runUpdate(state),
+        }),
+        logs: renderLogs({
+          loading: state.logsLoading,
+          error: state.logsError,
+          file: state.logsFile,
+          entries: state.logsEntries,
+          filterText: state.logsFilterText,
+          levelFilters: state.logsLevelFilters,
+          autoFollow: state.logsAutoFollow,
+          truncated: state.logsTruncated,
+          onFilterTextChange: (next) => (state.logsFilterText = next),
+          onLevelToggle: (level, enabled) => {
+            state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
+          },
+          onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
+          onRefresh: () => loadLogs(state, { reset: true }),
+          onExport: (lines, label) => state.exportLogs(lines, label),
+          onScroll: (event) => state.handleLogsScroll(event),
+        }),
+        debug: renderDebug({
+          loading: state.debugLoading,
+          status: state.debugStatus,
+          health: state.debugHealth,
+          models: state.debugModels,
+          heartbeat: state.debugHeartbeat,
+          eventLog: state.eventLog,
+          callMethod: state.debugCallMethod,
+          callParams: state.debugCallParams,
+          callResult: state.debugCallResult,
+          callError: state.debugCallError,
+          onCallMethodChange: (next) => (state.debugCallMethod = next),
+          onCallParamsChange: (next) => (state.debugCallParams = next),
+          onRefresh: () => loadDebug(state),
+          onCall: () => callDebugMethod(state),
+        }),
+      })}
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
     </div>
